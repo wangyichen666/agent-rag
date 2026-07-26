@@ -1,0 +1,46 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: agent-rag-java
+  datasource:
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/agent_rag?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:root}
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 200MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+# 业务配置
+rag:
+  jwt:
+    # 生产环境务必用环境变量覆盖
+    secret: ${JWT_SECRET:agent-rag-dev-secret-key-please-change-in-production-0123456789abcdef}
+    expire-minutes: 720
+  ai:
+    base-url: ${AI_BASE_URL:http://127.0.0.1:8000}
+    internal-token: ${AI_INTERNAL_TOKEN:dev-internal-token}
+    connect-timeout-seconds: 10
+    read-timeout-seconds: 300
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_BUCKET:rag-docs}
+    presign-expire-minutes: 120
+  admin:
+    # 首次启动初始化的管理员账号
+    username: ${ADMIN_USERNAME:admin}
+    password: ${ADMIN_PASSWORD:admin123}
+
+logging:
+  level:
+    com.example.rag: info

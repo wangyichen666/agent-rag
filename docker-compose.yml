@@ -1,0 +1,102 @@
+name: agent-rag
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./agent-rag-java/src/main/resources/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports: ["3306:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-proot"]
+      interval: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    ports: ["9000:9000", "9001:9001"]
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    volumes:
+      - etcd-data:/etcd
+
+  milvus:
+    image: milvusdb/milvus:v2.4.13
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus-data:/var/lib/milvus
+    ports: ["19530:19530", "9091:9091"]
+    depends_on: [etcd, minio]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      retries: 30
+
+  agent-rag-python:
+    build: ./agent-rag-python
+    environment:
+      RAG_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-dev-internal-token}
+      RAG_VECTOR_STORE: milvus
+      RAG_MILVUS_URI: http://milvus:19530
+      RAG_EMBEDDING_ENABLED: "true"
+      RAG_RERANKER_ENABLED: "true"
+      RAG_LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      RAG_LLM_API_KEY: ${LLM_API_KEY:?please set LLM_API_KEY}
+      RAG_LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+    ports: ["8000:8000"]
+    depends_on:
+      milvus:
+        condition: service_healthy
+    # GPU 部署时打开：
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  agent-rag-java:
+    build: ./agent-rag-java
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/agent_rag?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      DB_USER: root
+      DB_PASSWORD: root
+      MINIO_ENDPOINT: http://minio:9000
+      AI_BASE_URL: http://agent-rag-python:8000
+      AI_INTERNAL_TOKEN: ${AI_INTERNAL_TOKEN:-dev-internal-token}
+      JWT_SECRET: ${JWT_SECRET:-agent-rag-dev-secret-key-please-change-in-production-0123456789abcdef}
+    ports: ["8080:8080"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      agent-rag-python:
+        condition: service_started
+
+  agent-rag-front:
+    build: ./agent-rag-front
+    ports: ["80:80"]
+    depends_on: [agent-rag-java]
+
+volumes:
+  mysql-data:
+  minio-data:
+  etcd-data:
+  milvus-data:
