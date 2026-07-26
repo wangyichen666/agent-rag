@@ -1,0 +1,34 @@
+# code/w10/tool_guard.yaml
+# ============================================================
+# W10 作业2:仿 QwenPaw security/tool_guard,用 YAML 声明工具调用拦截规则
+# 对照 QwenPaw security/tool_guard/execution_level.py 四档:
+#   STRICT(全审批) / SMART(低危放行中危+审批) / AUTO(仅guarded审批) / OFF(关)
+# 配套代码:code/w10/tool_guard_demo.py 解析本文件并判定
+# ============================================================
+# 全局执行级别(可被单条规则覆盖)
+execution_level: smart   # strict | smart | auto | off
+
+rules:
+  # 直接拒绝:递归删除根/家目录/通配 —— 绝不允许
+  - name: block-destructive-rm
+    pattern: 'rm\s+-rf?\s+(/|~|\*|\.\.)'
+    level: deny
+    message: "禁止递归删除根/家目录/上级目录"
+
+  # 直接拒绝:下载即执行 —— 典型 prompt 注入逃逸
+  - name: block-pipe-exec
+    pattern: '(curl|wget)[^\|]*\|\s*(sh|bash|zsh)'
+    level: deny
+    message: "禁止管道下载即执行"
+
+  # 需审批:sudo 提权 —— SMART/AUTO 下走审批流(对应 ApprovalService)
+  - name: warn-sudo
+    pattern: '\bsudo\b'
+    level: ask
+    message: "sudo 操作需确认"
+
+  # 需审批:写系统目录
+  - name: warn-system-write
+    pattern: '(/\>|>>?)\s*(/etc|/usr|/bin|/System)'
+    level: ask
+    message: "写系统目录需确认"

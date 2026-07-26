@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+__MACOSX/
+
+# web 产物里偶发调试文件
+_web/dist/data/**/*.bak
+*.pyc
+
+# 日志/临时
+*.log

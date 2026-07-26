@@ -1,0 +1,2 @@
+window.__code__ = window.__code__ || {};
+window.__code__["examples-rag-integrate-with-agent-py"] = {"code_id": "examples-rag-integrate-with-agent-py", "missing": true, "ref": "examples/rag/integrate_with_agent.py", "title": "examples/rag/integrate_with_agent.py", "source_path": "", "highlight_line": null, "code_html": "", "explanation": "（源码文件未找到，可能路径已变化）", "knowledge_points": [], "related_docs": []};
