@@ -14,6 +14,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.net.http.HttpClient.Version;
 import java.time.Duration;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -37,6 +38,7 @@ public class AiClient {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
         this.internalToken = internalToken;
         this.http = HttpClient.newBuilder()
+                .version(Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(connectTimeoutSeconds))
                 .build();
     }
@@ -47,6 +49,27 @@ public class AiClient {
                 .header("Content-Type", "application/json")
                 .header("X-Internal-Token", internalToken)
                 .POST(HttpRequest.BodyPublishers.ofString(om.writeValueAsString(body)));
+    }
+
+    /** GET JSON 调用。 */
+    public JsonNode get(String path) {
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + path))
+                    .header("X-Internal-Token", internalToken)
+                    .timeout(Duration.ofSeconds(60))
+                    .GET().build();
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() >= 300) {
+                throw BizException.of("AI_SERVICE_ERROR",
+                        "AI 服务响应异常: " + resp.statusCode() + " " + resp.body());
+            }
+            return om.readTree(resp.body());
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw BizException.of("AI_SERVICE_ERROR", "调用 AI 服务失败: " + e.getMessage());
+        }
     }
 
     /** 普通 JSON 调用。 */

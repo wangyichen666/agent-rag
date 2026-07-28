@@ -42,15 +42,20 @@ async def chat_event_stream(req: ChatRequest, deps) -> AsyncIterator[str]:
         # 1. 改写与 embedding 可并行：改写结果才用于检索，先改写
         rewritten = await rewrite_query(deps.llm, req.question, req.history,
                                         settings, options.rewrite_query)
+        if rewritten != req.question:
+            logger.info("chat: query rewritten '%s...' -> '%s...'", req.question[:50], rewritten[:50])
 
         # 2. 混合检索
         candidates = await hybrid_retrieve(deps.store, deps.embedder, req.kb_ids,
                                            rewritten, settings, dense_top_k, sparse_top_k)
         dense_hits = sum(1 for c in candidates if c.dense_rank is not None)
         sparse_hits = sum(1 for c in candidates if c.sparse_rank is not None)
+        logger.info("chat: retrieved %d candidates (dense=%d, sparse=%d)", len(candidates), dense_hits, sparse_hits)
 
         # 3. Rerank 精排
         ranked = await rank_candidates(rewritten, candidates, deps.reranker, top_n)
+        logger.info("chat: reranked to %d, top_score=%.4f, degraded=%s", len(ranked.selected),
+                    ranked.rerank_scores[0] if ranked.rerank_scores else 0.0, ranked.rerank_degraded)
 
         # 4. 阈值判断（降级模式不做分数阈值，rrf 分数与阈值不可比）
         no_context = not ranked.selected

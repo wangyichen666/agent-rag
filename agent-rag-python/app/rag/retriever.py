@@ -1,4 +1,7 @@
-"""混合检索：稠密 + 稀疏双路召回，RRF 融合，可选 Rerank 精排。"""
+"""混合检索：稠密 + 稀疏双路召回，RRF 融合，可选 Rerank 精排。
+
+SiliconFlow Qwen3-Embedding 不返回稀疏向量，此时自动降级为纯稠密检索。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +9,7 @@ import logging
 from dataclasses import dataclass, field
 
 from app.core.config import Settings
-from app.rag.reranker import BgeReranker
+from app.rag.reranker import SiliconFlowReranker
 from app.rag.vector_store import ScoredChunk, VectorStore
 
 logger = logging.getLogger(__name__)
@@ -53,11 +56,22 @@ def rrf_fuse(dense_hits: list[ScoredChunk], sparse_hits: list[ScoredChunk],
     return sorted(pool.values(), key=lambda c: c.rrf_score, reverse=True)
 
 
+def _has_sparse(sparse_vec: dict[int, float]) -> bool:
+    """判断稀疏向量是否有效（非空且有非零权重）。"""
+    return bool(sparse_vec) and any(v != 0.0 for v in sparse_vec.values())
+
+
 async def hybrid_retrieve(store: VectorStore, embedder, kb_ids: list[str], query: str,
                           settings: Settings, dense_top_k: int, sparse_top_k: int) -> list[Candidate]:
-    """双路并发召回 + RRF 融合。稀疏路失败时降级为纯稠密。"""
+    """双路并发召回 + RRF 融合。稀疏向量为空时自动降级为纯稠密。"""
     embedded = await asyncio.to_thread(embedder.embed_texts, [query], True)
     dense_vec, sparse_vec = embedded.dense[0], embedded.sparse[0]
+
+    if not _has_sparse(sparse_vec):
+        # SiliconFlow Qwen3-Embedding 无稀疏向量，仅走稠密路
+        logger.debug("sparse vector empty, dense-only retrieval")
+        dense_hits = await asyncio.to_thread(store.search_dense, kb_ids, dense_vec, dense_top_k)
+        return rrf_fuse(dense_hits, [], settings.rrf_k)
 
     dense_task = asyncio.to_thread(store.search_dense, kb_ids, dense_vec, dense_top_k)
     sparse_task = asyncio.to_thread(store.search_sparse, kb_ids, sparse_vec, sparse_top_k)
@@ -76,7 +90,7 @@ async def hybrid_retrieve(store: VectorStore, embedder, kb_ids: list[str], query
     return rrf_fuse(dense_hits, sparse_hits, settings.rrf_k)
 
 
-async def rank_candidates(query: str, candidates: list[Candidate], reranker: BgeReranker,
+async def rank_candidates(query: str, candidates: list[Candidate], reranker: SiliconFlowReranker,
                           top_n: int) -> RankResult:
     """Rerank 精排；失败时按 RRF 顺序截断（降级）。"""
     if not candidates:

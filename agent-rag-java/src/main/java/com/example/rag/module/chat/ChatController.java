@@ -69,6 +69,20 @@ public class ChatController {
         return aiClient.health();
     }
 
+    // ========== Debug / Trace API ==========
+
+    /** RAG 全链路调试：query → retrieve → rerank 全流程。 */
+    @PostMapping("/debug/trace")
+    public Result<JsonNode> debugTrace(@RequestBody Map<String, Object> body) {
+        return Result.ok(aiClient.post("/v1/debug/trace", body));
+    }
+
+    /** 查看文档在向量库中的存储格式。 */
+    @GetMapping("/debug/chunks/{kbId}/{docId}")
+    public Result<JsonNode> debugChunks(@PathVariable String kbId, @PathVariable String docId) {
+        return Result.ok(aiClient.get("/v1/debug/chunks/" + kbId + "/" + docId));
+    }
+
     @Data
     public static class CreateConversationRequest {
         @NotEmpty(message = "请至少选择一个知识库")

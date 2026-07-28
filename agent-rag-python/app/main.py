@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.deps import build_deps
 from app.api.routes_chat import router as chat_router
+from app.api.routes_debug import router as debug_router
 from app.api.routes_ingest import router as ingest_router
 from app.api.routes_misc import router as misc_router
 from app.core.config import get_settings
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="agent-rag-python", version="0.1.0", lifespan=lifespan)
 
 app.include_router(chat_router)
+app.include_router(debug_router)
 app.include_router(ingest_router)
 app.include_router(misc_router)
 

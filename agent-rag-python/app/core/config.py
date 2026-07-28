@@ -19,18 +19,18 @@ class Settings(BaseSettings):
     milvus_collection: str = "rag_chunks"
     milvus_token: str = ""
 
-    # ---- Embedding（BGE-M3）----
-    embedding_model_name: str = "BAAI/bge-m3"
-    embedding_device: str = "auto"          # auto / cpu / cuda / cuda:0
-    embedding_batch_size: int = 32
-    embedding_query_instruction: str = "为这个句子生成表示以用于检索相关文章："
-    embedding_use_fp16: bool = True
+    # ---- SiliconFlow API（Embedding / Rerank 共用）----
+    siliconflow_api_key: str = ""
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+
+    # ---- Embedding（SiliconFlow Qwen3-Embedding）----
+    embedding_model_name: str = "Qwen/Qwen3-Embedding-0.6B"   # 0.6B=1024维, 4B=2560维, 8B=4096维
     embedding_enabled: bool = True          # False 时用伪向量（仅联通性调试）
 
-    # ---- Reranker ----
-    reranker_model_name: str = "BAAI/bge-reranker-v2-m3"
+    # ---- Reranker（SiliconFlow Qwen3-Reranker）----
+    reranker_model_name: str = "Qwen/Qwen3-Reranker-0.6B"
     reranker_enabled: bool = True
-    reranker_max_length: int = 1024
+    reranker_top_n: int = 5                 # 返回 top_n 个文档
 
     # ---- LLM（OpenAI 兼容协议：DeepSeek / 通义 / vLLM）----
     llm_base_url: str = "https://api.deepseek.com"

@@ -61,8 +61,10 @@ class LlmClient:
     async def chat_once(self, messages: list[dict], model: str | None = None,
                         temperature: float = 0.1, max_tokens: int = 256) -> str:
         """非流式调用（query 改写等场景）。"""
+        model_name = model or self._settings.llm_model
+        logger.debug("llm chat_once: model=%s temp=%.2f max_tokens=%d", model_name, temperature, max_tokens)
         payload = {
-            "model": model or self._settings.llm_model,
+            "model": model_name,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -71,11 +73,14 @@ class LlmClient:
         resp = await self._get_client().post("/chat/completions", json=payload)
         resp.raise_for_status()
         data = resp.json()
-        return (data["choices"][0]["message"]["content"] or "").strip()
+        content = (data["choices"][0]["message"]["content"] or "").strip()
+        logger.debug("llm chat_once OK: %d chars", len(content))
+        return content
 
     async def chat_stream(self, messages: list[dict], temperature: float,
                           max_tokens: int) -> AsyncIterator[str]:
         """流式调用，逐 delta 产出文本。"""
+        logger.debug("llm chat_stream: model=%s temp=%.2f max_tokens=%d", self._settings.llm_model, temperature, max_tokens)
         payload = {
             "model": self._settings.llm_model,
             "messages": messages,

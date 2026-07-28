@@ -1,4 +1,4 @@
-import { MessageOutlined, DatabaseOutlined, LogoutOutlined } from '@ant-design/icons'
+import { MessageOutlined, DatabaseOutlined, LogoutOutlined, EyeOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import { App as AntdApp, Layout, Menu, Button, Space } from 'antd'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { getToken } from './api/client'
@@ -6,6 +6,8 @@ import { useAuthStore } from './stores/auth'
 import ChatPage from './pages/ChatPage'
 import KbPage from './pages/KbPage'
 import LoginPage from './pages/LoginPage'
+import TracePage from './pages/TracePage'
+import StoragePage from './pages/StoragePage'
 
 const { Header, Content } = Layout
 
@@ -17,7 +19,10 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 function Shell({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const logout = useAuthStore((s) => s.logout)
-  const selected = location.pathname.startsWith('/kb') ? 'kb' : 'chat'
+  const selected = location.pathname.startsWith('/kb') ? 'kb'
+    : location.pathname.startsWith('/trace') ? 'trace'
+    : location.pathname.startsWith('/storage') ? 'storage'
+    : 'chat'
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Header style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
@@ -32,6 +37,8 @@ function Shell({ children }: { children: React.ReactNode }) {
           items={[
             { key: 'chat', icon: <MessageOutlined />, label: <Link to="/">对话</Link> },
             { key: 'kb', icon: <DatabaseOutlined />, label: <Link to="/kb">知识库管理</Link> },
+            { key: 'trace', icon: <EyeOutlined />, label: <Link to="/trace">追溯</Link> },
+            { key: 'storage', icon: <FolderOpenOutlined />, label: <Link to="/storage">向量库</Link> },
           ]}
         />
         <Space>
@@ -68,6 +75,26 @@ export default function App() {
             <RequireAuth>
               <Shell>
                 <KbPage />
+              </Shell>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/trace"
+          element={
+            <RequireAuth>
+              <Shell>
+                <TracePage />
+              </Shell>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/storage"
+          element={
+            <RequireAuth>
+              <Shell>
+                <StoragePage />
               </Shell>
             </RequireAuth>
           }

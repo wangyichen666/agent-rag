@@ -1,7 +1,7 @@
-"""Embedding 层：BGE-M3（稠密 + 稀疏），懒加载 + hash LRU 缓存。
+"""Embedding 层：SiliconFlow Qwen3-Embedding API + hash LRU 缓存。
 
-- query 侧加指令前缀，passage 侧不加（BGE 系列非对称用法）
-- embedding_enabled=false 时切换为确定性伪向量，仅供无模型环境联调
+SiliconFlow Qwen3-Embedding 仅返回稠密向量（0.6B=1024维），无稀疏/词法权重。
+embedding_enabled=false 时切换为确定性伪向量，仅供无模型环境联调。
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import math
 from collections import OrderedDict
 from dataclasses import dataclass
 
+import httpx
 import numpy as np
 
 from app.core.config import Settings
@@ -34,7 +35,8 @@ class _LruCache:
 
     @staticmethod
     def _key(text: str, is_query: bool) -> str:
-        h = hashlib.sha256(("q:" if is_query else "p:") + text.encode("utf-8")).hexdigest()
+        prefix = b"q:" if is_query else b"p:"
+        h = hashlib.sha256(prefix + text.encode("utf-8")).hexdigest()
         return h
 
     def get(self, text: str, is_query: bool):
@@ -52,48 +54,36 @@ class _LruCache:
             self._store.popitem(last=False)
 
 
-class BgeM3Embedder:
-    """BGE-M3 封装。模型体积大且依赖 torch，首次调用时才加载。"""
+class SiliconFlowEmbedder:
+    """SiliconFlow Qwen3-Embedding API 封装。仅返回稠密向量，稀疏向量为空 dict。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._model = None
         self._cache = _LruCache(_CACHE_CAPACITY)
 
-    def _load(self) -> None:
-        if self._model is not None:
-            return
-        from FlagEmbedding import BGEM3FlagModel  # 延迟导入重依赖
+    @property
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self._settings.siliconflow_api_key}",
+            "Content-Type": "application/json",
+        }
 
-        device = self._settings.embedding_device
-        if device == "auto":
-            device = self._detect_device()
-        logger.info("loading embedding model %s on %s", self._settings.embedding_model_name, device)
-        self._model = BGEM3FlagModel(
-            self._settings.embedding_model_name,
-            devices=device,
-            use_fp16=self._settings.embedding_use_fp16 and device != "cpu",
-        )
-
-    @staticmethod
-    def _detect_device() -> str:
-        try:
-            import torch
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
-            return "cpu"
+    @property
+    def _embed_url(self) -> str:
+        return f"{self._settings.siliconflow_base_url}/embeddings"
 
     # ------------------------------------------------------------------
 
     def embed_texts(self, texts: list[str], is_query: bool) -> EmbedResult:
+        """批量向量化。is_query 仅用于缓存键区分，API 侧不做特殊处理。"""
         if not texts:
             return EmbedResult([], [])
-        self._load()
 
         dense_out: list[list[float] | None] = [None] * len(texts)
         sparse_out: list[dict[int, float] | None] = [None] * len(texts)
         miss_idx: list[int] = []
         miss_texts: list[str] = []
+
         for i, t in enumerate(texts):
             hit = self._cache.get(t, is_query)
             if hit is not None:
@@ -103,23 +93,35 @@ class BgeM3Embedder:
                 miss_texts.append(t)
 
         if miss_texts:
-            outputs = self._model.encode(
-                miss_texts,
-                batch_size=self._settings.embedding_batch_size,
-                max_length=8192,
-                instruction=self._settings.embedding_query_instruction if is_query else None,
-                return_dense=True,
-                return_sparse=True,
-                return_colbert_vecs=False,
-            )
-            dense_vecs = np.asarray(outputs["dense_vecs"], dtype=np.float32)
-            dense_vecs = self._normalize(dense_vecs)
-            lexical = outputs["lexical_weights"]
-            for pos, idx in enumerate(miss_idx):
-                dense = dense_vecs[pos].tolist()
-                sparse = {int(k): float(v) for k, v in lexical[pos].items()}
-                dense_out[idx], sparse_out[idx] = dense, sparse
-                self._cache.put(texts[idx], is_query, (dense, sparse))
+            logger.debug("embedding %d texts (cache miss %d, model=%s)", len(texts), len(miss_texts),
+                         self._settings.embedding_model_name)
+            try:
+                resp = httpx.post(
+                    self._embed_url,
+                    headers=self._headers,
+                    json={
+                        "model": self._settings.embedding_model_name,
+                        "input": miss_texts,
+                        "encoding_format": "float",
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()["data"]
+                logger.debug("embedding OK: %d vectors, dim=%d", len(data), len(data[0]["embedding"]))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("SiliconFlow embedding API failed: %s", exc)
+                raise
+
+            for item in data:
+                idx_in_data = item["index"]
+                real_idx = miss_idx[idx_in_data]
+                vec = np.asarray(item["embedding"], dtype=np.float32)
+                vec = self._normalize_single(vec)
+                dense = vec.tolist()
+                sparse: dict[int, float] = {}
+                dense_out[real_idx], sparse_out[real_idx] = dense, sparse
+                self._cache.put(texts[real_idx], is_query, (dense, sparse))
 
         return EmbedResult(
             dense=[d for d in dense_out if d is not None],
@@ -127,10 +129,9 @@ class BgeM3Embedder:
         )
 
     @staticmethod
-    def _normalize(vecs: np.ndarray) -> np.ndarray:
-        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        return vecs / norms
+    def _normalize_single(vec: np.ndarray) -> np.ndarray:
+        norm = np.linalg.norm(vec)
+        return vec / norm if norm != 0 else vec
 
     def health(self) -> str:
         try:
@@ -164,4 +165,4 @@ class FakeEmbedder:
 
 
 def build_embedder(settings: Settings):
-    return BgeM3Embedder(settings) if settings.embedding_enabled else FakeEmbedder()
+    return SiliconFlowEmbedder(settings) if settings.embedding_enabled else FakeEmbedder()
