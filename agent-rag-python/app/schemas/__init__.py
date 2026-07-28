@@ -31,6 +31,7 @@ class ChatOptions(BaseModel):
 
 class ChatRequest(BaseModel):
     session_id: str
+    trace_id: str = ""
     kb_ids: list[str]
     question: str
     history: list[HistoryMessage] = Field(default_factory=list)
@@ -52,6 +53,7 @@ class RetrievalDebug(BaseModel):
     dense_hits: int = 0
     sparse_hits: int = 0
     rerank_scores: list[float] = Field(default_factory=list)
+    trace_id: str = ""
 
 
 # ---------- retrieve ----------

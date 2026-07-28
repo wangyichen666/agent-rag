@@ -69,6 +69,14 @@ public class ChatController {
         return aiClient.health();
     }
 
+    // ========== Rewrites API ==========
+
+    /** 返回所有改写过的消息（跨对话），用于改写记录页。 */
+    @GetMapping("/messages/rewrites")
+    public Result<List<Map<String, Object>>> rewrites() {
+        return Result.ok(chatService.listRewrites());
+    }
+
     // ========== Debug / Trace API ==========
 
     /** RAG 全链路调试：query → retrieve → rerank 全流程。 */

@@ -14,6 +14,9 @@ public class ChatMessage {
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    /** 全链路追踪 ID（UUID 前 16 位），贯穿 Query → Rewrite → Retrieve → Rerank → Generate */
+    private String traceId;
+
     private Long conversationId;
 
     /** user / assistant */

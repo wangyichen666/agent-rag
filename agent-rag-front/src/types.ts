@@ -59,9 +59,11 @@ export interface Citation {
 
 export interface ChatMessage {
   id: number
+  traceId?: string
   conversationId: number
   role: 'user' | 'assistant'
   content: string
+  rewrittenQuery?: string
   citations?: string
   latencyMs?: number
   feedback?: number
@@ -73,6 +75,7 @@ export type SseEventName = 'meta' | 'token' | 'done' | 'error'
 
 export interface SseMeta {
   session_id: string
+  trace_id: string
   rewritten_query: string
   citations: Citation[]
   no_relevant_context: boolean

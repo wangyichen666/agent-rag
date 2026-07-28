@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -82,8 +83,11 @@ public class ChatService {
             throw BizException.of("INVALID_REQUEST", "本会话没有可用的知识库");
         }
 
+        // 0. 生成全链路 trace_id
+        String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+
         // 1. 落库用户消息 + 组装历史
-        saveMessage(conversationId, "user", question, null, null, null, null);
+        saveMessage(conversationId, "user", question, traceId, null, null, null, null);
         if ("新会话".equals(conversation.getTitle())) {
             conversation.setTitle(question.length() > 30 ? question.substring(0, 30) + "..." : question);
             conversationMapper.updateById(conversation);
@@ -94,6 +98,7 @@ public class ChatService {
         String sessionId = "conv_" + conversationId + "_" + System.currentTimeMillis();
         Map<String, Object> body = Map.of(
                 "session_id", sessionId,
+                "trace_id", traceId,
                 "kb_ids", kbCodes,
                 "question", question,
                 "history", history,
@@ -143,7 +148,7 @@ public class ChatService {
                         log.warn("forward event failed: {}", e.getMessage());
                     }
                 });
-                persistAssistantMessage(conversationId, fullAnswer.toString(),
+                persistAssistantMessage(conversationId, fullAnswer.toString(), traceId,
                         citationsJson.toString(), debugJson.toString(),
                         rewritten.toString(), (int) (System.currentTimeMillis() - start));
                 emitter.complete();
@@ -164,21 +169,22 @@ public class ChatService {
         emitter.send(SseEmitter.event().name(event.event()).data(event.data()));
     }
 
-    private void persistAssistantMessage(Long conversationId, String content, String citations,
-                                         String debug, String rewrittenQuery, int latencyMs) {
+    private void persistAssistantMessage(Long conversationId, String content, String traceId,
+                                         String citations, String debug, String rewrittenQuery, int latencyMs) {
         if (content == null || content.isBlank()) {
             return;
         }
-        saveMessage(conversationId, "assistant", content, citations, debug, rewrittenQuery, latencyMs);
+        saveMessage(conversationId, "assistant", content, traceId, citations, debug, rewrittenQuery, latencyMs);
         Conversation touch = new Conversation();
         touch.setId(conversationId);
         conversationMapper.updateById(touch);  // 触发 updated_at 刷新
     }
 
-    private void saveMessage(Long conversationId, String role, String content, String citations,
-                             String debug, String rewrittenQuery, Integer latencyMs) {
+    private void saveMessage(Long conversationId, String role, String content, String traceId,
+                             String citations, String debug, String rewrittenQuery, Integer latencyMs) {
         ChatMessage msg = new ChatMessage();
         msg.setConversationId(conversationId);
+        msg.setTraceId(traceId);
         msg.setRole(role);
         msg.setContent(content);
         msg.setCitations(citations);
@@ -211,6 +217,44 @@ public class ChatService {
         } catch (Exception e) {
             return List.of();
         }
+    }
+
+    /** 返回所有改写过的消息（跨对话），用于改写记录页。 */
+    public List<Map<String, Object>> listRewrites() {
+        // 查询所有有 rewritten_query 的 assistant 消息
+        List<ChatMessage> assistantMsgs = messageMapper.selectList(new LambdaQueryWrapper<ChatMessage>()
+                .isNotNull(ChatMessage::getRewrittenQuery)
+                .ne(ChatMessage::getRewrittenQuery, "")
+                .eq(ChatMessage::getRole, "assistant")
+                .orderByDesc(ChatMessage::getId)
+                .last("limit 200"));
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (ChatMessage assistMsg : assistantMsgs) {
+            // 找到这条 assistant 消息前面的 user 消息（同一个 conversation，id 更小）
+            ChatMessage userMsg = messageMapper.selectOne(new LambdaQueryWrapper<ChatMessage>()
+                    .eq(ChatMessage::getConversationId, assistMsg.getConversationId())
+                    .eq(ChatMessage::getRole, "user")
+                    .lt(ChatMessage::getId, assistMsg.getId())
+                    .orderByDesc(ChatMessage::getId)
+                    .last("limit 1"));
+            if (userMsg == null) continue;
+            // 只有改写后的 query 与原问题不同时才显示
+            if (assistMsg.getRewrittenQuery() == null
+                    || assistMsg.getRewrittenQuery().equals(userMsg.getContent())) continue;
+
+            Conversation conv = conversationMapper.selectById(assistMsg.getConversationId());
+            if (conv == null) continue;
+            result.add(Map.of(
+                    "messageId", assistMsg.getId(),
+                    "traceId", assistMsg.getTraceId() != null ? assistMsg.getTraceId() : "",
+                    "conversationId", assistMsg.getConversationId(),
+                    "conversationTitle", conv.getTitle() != null ? conv.getTitle() : "",
+                    "originalQuery", userMsg.getContent(),
+                    "rewrittenQuery", assistMsg.getRewrittenQuery(),
+                    "createdAt", assistMsg.getCreatedAt() != null ? assistMsg.getCreatedAt().toString() : ""
+            ));
+        }
+        return result;
     }
 
     public void feedback(Long messageId, Integer feedback, String note, Long userId) {

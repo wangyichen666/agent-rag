@@ -1,5 +1,5 @@
-import { PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import { App, Button, Card, Checkbox, Input, List, Space, Spin, Tag, Tooltip } from 'antd'
+import { EyeOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
+import { App, Button, Card, Checkbox, Input, List, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
@@ -14,7 +14,11 @@ interface UiMessage {
   citations?: Citation[]
   noContext?: boolean
   streaming?: boolean
+  traceId?: string
+  rewrittenQuery?: string
 }
+
+const { Text } = Typography
 
 export default function ChatPage() {
   const { message } = App.useApp()
@@ -49,6 +53,8 @@ export default function ChatPage() {
         role: m.role,
         content: m.content,
         citations: m.citations ? safeParse(m.citations) : undefined,
+        traceId: m.traceId,
+        rewrittenQuery: m.rewrittenQuery,
       })),
     )
   }, [])
@@ -92,7 +98,17 @@ export default function ChatPage() {
           onMeta: (meta: SseMeta) => {
             citations = meta.citations ?? []
             noContext = meta.no_relevant_context
-            setMessages((prev) => patchLast(prev, { citations, noContext }))
+            setMessages((prev) => {
+              const last = prev[prev.length - 1]
+              // 对比改写后的 query 是否与原问题不同
+              const origQuestion = prev[prev.length - 2]?.content || ''
+              const wasRewritten = meta.rewritten_query && meta.rewritten_query !== origQuestion
+              return patchLast(prev, {
+                citations, noContext,
+                traceId: meta.trace_id,
+                rewrittenQuery: wasRewritten ? meta.rewritten_query : undefined,
+              })
+            })
           },
           onToken: (delta) => {
             setMessages((prev) => {
@@ -193,6 +209,22 @@ export default function ChatPage() {
                             </Tag>
                           </Tooltip>
                         ))}
+                      </div>
+                    )}
+                    {m.rewrittenQuery && (
+                      <div style={{ marginTop: 4, fontSize: 12, color: '#faad14' }}>
+                        🔄 已改写：{m.rewrittenQuery}
+                      </div>
+                    )}
+                    {m.traceId && (
+                      <div style={{ marginTop: 6, fontSize: 12 }}>
+                        <a
+                          href={`#/trace?traceId=${m.traceId}&query=${encodeURIComponent(m.content)}`}
+                          style={{ color: '#1677ff' }}
+                        >
+                          <EyeOutlined /> 查看检索链路
+                        </a>
+                        <Text type="secondary" style={{ marginLeft: 8 }}>trace: {m.traceId}</Text>
                       </div>
                     )}
                   </>

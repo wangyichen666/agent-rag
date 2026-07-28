@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS conversation (
 
 CREATE TABLE IF NOT EXISTS message (
     id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+    trace_id          VARCHAR(64),
     conversation_id   BIGINT       NOT NULL,
     role              VARCHAR(16)  NOT NULL,
     content           MEDIUMTEXT   NOT NULL,

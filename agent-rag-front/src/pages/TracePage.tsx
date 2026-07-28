@@ -1,9 +1,10 @@
 import { SearchOutlined } from '@ant-design/icons'
 import {
-  App, Button, Card, Collapse, Descriptions, Input, List, Select,
-  Space, Spin, Table, Tag, Timeline, Typography, Result,
+  App, Button, Card, Descriptions, Input, Select,
+  Space, Table, Tag, Typography, Result,
 } from 'antd'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type { Kb } from '../types'
 
@@ -69,6 +70,7 @@ function ContentPreview({ content, maxLen = 500 }: { content: string; maxLen?: n
 
 export default function TracePage() {
   const { message } = App.useApp()
+  const [searchParams] = useSearchParams()
   const [kbs, setKbs] = useState<Kb[]>([])
   const [checkedKbIds, setCheckedKbIds] = useState<number[]>([])
   const [query, setQuery] = useState('')
@@ -79,20 +81,46 @@ export default function TracePage() {
     api.get<Kb[]>('/api/kb').then(setKbs).catch(() => {})
   }, [])
 
+  // 支持 URL 参数：?traceId=xxx&query=xxx&kbIds=xxx
+  useEffect(() => {
+    const traceId = searchParams.get('traceId')
+    const urlQuery = searchParams.get('query')
+    const kbIdsStr = searchParams.get('kbIds')
+    if (urlQuery) {
+      setQuery(urlQuery)
+      if (kbIdsStr) {
+        // 根据 kb_code 匹配 kb id
+        const codes = kbIdsStr.split(',')
+        api.get<Kb[]>('/api/kb').then(list => {
+          const ids = list.filter(k => codes.includes(k.kbCode)).map(k => k.id)
+          setCheckedKbIds(ids)
+          // 自动执行 trace
+          if (ids.length > 0) {
+            setTimeout(() => runTraceWith(urlQuery, ids, list), 300)
+          }
+        }).catch(() => {})
+      }
+    }
+  }, [searchParams])
+
   const runTrace = async () => {
-    if (!query.trim() || checkedKbIds.length === 0) {
+    await runTraceWith(query, checkedKbIds, kbs)
+  }
+
+  const runTraceWith = async (q: string, ids: number[], kbList: Kb[]) => {
+    if (!q.trim() || ids.length === 0) {
       message.warning('请选择知识库并输入查询')
       return
     }
     setLoading(true)
     setTrace(null)
     try {
-      const kbCodes = kbs
-        .filter(k => checkedKbIds.includes(k.id))
+      const kbCodes = kbList
+        .filter(k => ids.includes(k.id))
         .map(k => k.kbCode)
       const data = await api.post<TraceData>('/api/debug/trace', {
         kb_ids: kbCodes,
-        query: query.trim(),
+        query: q.trim(),
         dense_top_k: 20,
         sparse_top_k: 20,
         rerank_top_n: 10,

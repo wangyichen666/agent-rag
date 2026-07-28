@@ -66,12 +66,14 @@ async def chat_event_stream(req: ChatRequest, deps) -> AsyncIterator[str]:
         debug = RetrievalDebug(
             rewritten_query=rewritten, dense_hits=dense_hits,
             sparse_hits=sparse_hits, rerank_scores=ranked.rerank_scores,
+            trace_id=req.trace_id,
         )
 
         # 5. 拒答分支
         if no_context:
             yield sse("meta", {
-                "session_id": req.session_id, "rewritten_query": rewritten,
+                "session_id": req.session_id, "trace_id": req.trace_id,
+                "rewritten_query": rewritten,
                 "citations": [], "no_relevant_context": True,
             })
             yield sse("token", {"delta": settings.no_context_answer})
@@ -85,7 +87,8 @@ async def chat_event_stream(req: ChatRequest, deps) -> AsyncIterator[str]:
         kept = trim_contexts(ranked.selected, settings.context_token_budget)
         citations = [c.model_dump() for c in build_citations(kept)]
         yield sse("meta", {
-            "session_id": req.session_id, "rewritten_query": rewritten,
+            "session_id": req.session_id, "trace_id": req.trace_id,
+            "rewritten_query": rewritten,
             "citations": citations, "no_relevant_context": False,
         })
 
