@@ -7,6 +7,7 @@ PyMuPDF>=1.24
 python-docx>=1.1
 pymilvus>=2.4
 numpy>=1.26
+neo4j>=5.20
 
 # ---- Embedding / Rerank 已切换为 SiliconFlow API，不再需要本地模型 ----
 # 如需切回本地模型：pip install torch>=2.2 FlagEmbedding>=1.2.10

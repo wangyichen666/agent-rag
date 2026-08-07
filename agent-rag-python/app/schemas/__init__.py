@@ -52,6 +52,7 @@ class RetrievalDebug(BaseModel):
     rewritten_query: str = ""
     dense_hits: int = 0
     sparse_hits: int = 0
+    graph_hits: int = 0
     rerank_scores: list[float] = Field(default_factory=list)
     trace_id: str = ""
 
@@ -154,3 +155,37 @@ class HealthResponse(BaseModel):
     status: str
     components: dict[str, str]
     models: dict[str, str]
+
+
+# ---------- knowledge graph ----------
+
+class GraphNode(BaseModel):
+    id: str
+    label: str
+    kind: Literal["entity", "chunk"]
+    entity_type: str = ""
+    doc_id: str = ""
+    source_file: str = ""
+
+
+class GraphEdge(BaseModel):
+    source: str
+    target: str
+    label: str = ""
+    kind: Literal["relates", "mentioned"]
+
+
+class GraphData(BaseModel):
+    kb_id: str
+    enabled: bool = True
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class GraphStats(BaseModel):
+    kb_id: str
+    enabled: bool = True
+    entity_count: int = 0
+    relation_count: int = 0
+    chunk_count: int = 0

@@ -33,6 +33,7 @@ async def ingest_status(task_id: str):
 @router.post("/v1/documents/delete", response_model=OkResponse)
 async def delete_document(req: DeleteDocumentRequest, deps: AppDeps = Depends(get_deps)):
     deps.store.delete_doc(req.kb_id, req.doc_id)
+    deps.graph_store.delete_doc(req.kb_id, req.doc_id)
     return OkResponse()
 
 
@@ -45,4 +46,5 @@ async def kb_create(req: KbCreateRequest, deps: AppDeps = Depends(get_deps)):
 @router.post("/v1/kb/delete", response_model=OkResponse)
 async def kb_delete(req: KbDeleteRequest, deps: AppDeps = Depends(get_deps)):
     deps.store.delete_kb(req.kb_id)
+    deps.graph_store.delete_kb(req.kb_id)
     return OkResponse()

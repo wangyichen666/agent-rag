@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     score_threshold: float = 0.35
     search_ef: int = 64
 
+    # ---- 知识图谱（Neo4j）----
+    graph_enabled: bool = True              # False 时图谱构建与检索整体跳过
+    neo4j_uri: str = "bolt://127.0.0.1:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "neo4j"
+    graph_extract_model: str = ""           # 为空则复用 llm_model
+    graph_extract_batch_size: int = 6       # 每次 LLM 抽取的 chunk 数（控制 token 成本）
+    graph_max_hops: int = 2                 # 图检索实体扩展跳数
+    graph_top_k: int = 8                    # 图通道返回的候选块数
+    graph_visual_limit: int = 300           # 可视化接口默认返回节点上限
+
     # ---- 生成 ----
     temperature: float = 0.1
     max_tokens: int = 1024

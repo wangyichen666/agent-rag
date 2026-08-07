@@ -12,6 +12,8 @@ import uuid
 import httpx
 
 from app.rag.chunkers import chunk_document
+from app.rag.extractor import extract_triples_batch
+from app.rag.graph_store import ChunkRef
 from app.rag.parsers import parse_document
 from app.rag.vector_store import StoredChunk
 from app.schemas import IngestCallback, IngestRequest, IngestStatus
@@ -117,6 +119,34 @@ async def run_ingest(req: IngestRequest, deps) -> None:
             for i, c in enumerate(chunks)
         ]
         await asyncio.to_thread(deps.store.upsert, stored)
+
+        # 6. 知识图谱构建（可选，失败不影响向量入库结果）
+        if settings.graph_enabled:
+            try:
+                chunk_refs = [
+                    ChunkRef(
+                        chunk_id=st.chunk_id,
+                        content=st.content,
+                        metadata={
+                            "source_file": req.file.name,
+                            "page": st.metadata.get("page"),
+                            "title_path": st.metadata.get("title_path") or [],
+                        },
+                    )
+                    for st in stored
+                ]
+                triples = await extract_triples_batch(
+                    deps.llm, [(st.chunk_id, st.content) for st in stored], settings
+                )
+                await asyncio.to_thread(
+                    deps.graph_store.upsert_doc,
+                    req.kb_id, req.doc_id, chunk_refs, triples,
+                )
+                triple_count = sum(len(v) for v in triples.values())
+                logger.info("ingest %s: graph built, %d triples", req.doc_id, triple_count)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("graph build failed for %s (vector ingest unaffected): %s",
+                               req.doc_id, exc)
 
         elapsed = int((time.monotonic() - t0) * 1000)
         registry.update(task_id, status="success", chunk_count=len(stored))

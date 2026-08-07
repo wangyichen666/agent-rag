@@ -12,7 +12,8 @@ from typing import AsyncIterator
 
 from app.rag.generator import (build_citations, build_messages, rewrite_query,
                                trim_contexts)
-from app.rag.retriever import hybrid_retrieve, rank_candidates
+from app.rag.graph_retriever import graph_retrieve
+from app.rag.retriever import fuse_graph, hybrid_retrieve, rank_candidates
 from app.schemas import ChatRequest, RetrievalDebug
 
 logger = logging.getLogger(__name__)
@@ -45,12 +46,21 @@ async def chat_event_stream(req: ChatRequest, deps) -> AsyncIterator[str]:
         if rewritten != req.question:
             logger.info("chat: query rewritten '%s...' -> '%s...'", req.question[:50], rewritten[:50])
 
-        # 2. 混合检索
+        # 2. 图谱检索与混合检索并行
+        graph_task = asyncio.create_task(
+            graph_retrieve(deps.graph_store, deps.llm, req.kb_ids, rewritten,
+                           settings, None)
+        ) if settings.graph_enabled else None
         candidates = await hybrid_retrieve(deps.store, deps.embedder, req.kb_ids,
                                            rewritten, settings, dense_top_k, sparse_top_k)
+        graph_cands = await graph_task if graph_task is not None else []
+        if graph_cands:
+            candidates = fuse_graph(candidates, graph_cands, settings.rrf_k)
         dense_hits = sum(1 for c in candidates if c.dense_rank is not None)
         sparse_hits = sum(1 for c in candidates if c.sparse_rank is not None)
-        logger.info("chat: retrieved %d candidates (dense=%d, sparse=%d)", len(candidates), dense_hits, sparse_hits)
+        graph_hits = sum(1 for c in candidates if c.graph_rank is not None)
+        logger.info("chat: retrieved %d candidates (dense=%d, sparse=%d, graph=%d)",
+                    len(candidates), dense_hits, sparse_hits, graph_hits)
 
         # 3. Rerank 精排
         ranked = await rank_candidates(rewritten, candidates, deps.reranker, top_n)
@@ -65,7 +75,8 @@ async def chat_event_stream(req: ChatRequest, deps) -> AsyncIterator[str]:
 
         debug = RetrievalDebug(
             rewritten_query=rewritten, dense_hits=dense_hits,
-            sparse_hits=sparse_hits, rerank_scores=ranked.rerank_scores,
+            sparse_hits=sparse_hits, graph_hits=graph_hits,
+            rerank_scores=ranked.rerank_scores,
             trace_id=req.trace_id,
         )
 

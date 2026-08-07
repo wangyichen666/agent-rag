@@ -7,10 +7,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from app.core.config import Settings
 from app.rag.reranker import SiliconFlowReranker
 from app.rag.vector_store import ScoredChunk, VectorStore
+
+if TYPE_CHECKING:  # 避免 retriever -> graph_retriever -> extractor -> generator -> retriever 循环
+    from app.rag.graph_retriever import GraphCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,8 @@ class Candidate:
     metadata: dict
     dense_rank: int | None = None
     sparse_rank: int | None = None
+    graph_rank: int | None = None
+    graph_hops: int = 0
     rrf_score: float = 0.0
     rerank_score: float | None = None
 
@@ -53,6 +59,23 @@ def rrf_fuse(dense_hits: list[ScoredChunk], sparse_hits: list[ScoredChunk],
 
     visit(dense_hits, "dense")
     visit(sparse_hits, "sparse")
+    return sorted(pool.values(), key=lambda c: c.rrf_score, reverse=True)
+
+
+def fuse_graph(candidates: list[Candidate], graph_cands: list[GraphCandidate],
+               rrf_k: int = 60) -> list[Candidate]:
+    """把图通道候选并入已有 RRF 池：graph_rank 作为独立通道参与融合。"""
+    if not graph_cands:
+        return candidates
+    pool = {c.chunk_id: c for c in candidates}
+    for i, g in enumerate(graph_cands, start=1):
+        c = pool.get(g.chunk_id)
+        if c is None:
+            c = Candidate(g.chunk_id, g.doc_id, g.content, g.metadata)
+            pool[g.chunk_id] = c
+        c.graph_rank = i
+        c.graph_hops = g.hop if not c.graph_hops else min(c.graph_hops, g.hop)
+        c.rrf_score += 1.0 / (rrf_k + i)
     return sorted(pool.values(), key=lambda c: c.rrf_score, reverse=True)
 
 

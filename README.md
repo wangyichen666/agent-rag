@@ -1,6 +1,6 @@
 # agent-rag
 
-企业知识库 RAG 问答系统。三层架构：前端（React）→ Java 业务层（Spring Boot）→ Python AI 层（FastAPI），基础设施使用 MySQL + MinIO + Milvus。
+企业知识库 RAG 问答系统。三层架构：前端（React）→ Java 业务层（Spring Boot）→ Python AI 层（FastAPI），基础设施使用 MySQL + MinIO + Milvus + Neo4j（知识图谱）。
 
 ## 架构总览
 
@@ -24,12 +24,16 @@
 │            FastAPI · httpx · numpy              │
 │   文档解析 → 切分 → Embedding → 检索 → Rerank    │
 │          Prompt 编排 → LLM 流式生成              │
+│     图谱：实体抽取 → Neo4j → 图检索融合           │
 └───────┬───────────────────────────┬────────────┘
         │                           │
 ┌───────▼──────┐  ┌──────────┐  ┌──▼───────────┐
 │    Milvus    │  │ DeepSeek │  │ SiliconFlow  │
 │  向量索引    │  │  LLM     │  │Embed/Rerank  │
 └──────────────┘  └──────────┘  └──────────────┘
+        ┌───────────────┐
+        │     Neo4j     │  知识图谱（实体-关系-出处块）
+        └───────────────┘
 ```
 
 ### 三层职责边界
@@ -84,6 +88,7 @@
 | MinIO | 文档对象存储 | 9000 / 9001 |
 | Milvus | 稠密向量索引（1024 维 HNSW） | 19530 |
 | etcd | Milvus 元数据 | 2379 |
+| Neo4j 5.26 | 知识图谱：实体/关系/出处块 | 7474 / 7687 |
 
 ## RAG 检索流程
 
@@ -96,7 +101,7 @@ Embedding 向量化（SiliconFlow Qwen3-Embedding）
   ↓
 Milvus 稠密检索（dense Top-20）
   ↓
-RRF 融合
+RRF 融合（dense + sparse + graph）
   ↓
 Rerank 精排（SiliconFlow Qwen3-Reranker）
   ↓
@@ -136,13 +141,17 @@ agent-rag/
 │       ├── api/
 │       │   ├── routes_chat.py    # 问答 API（SSE）
 │       │   ├── routes_ingest.py  # 文档入库 API
-│       │   └── routes_debug.py   # 追溯 API
+│       │   ├── routes_debug.py   # 追溯 API
+│       │   └── routes_graph.py   # 图谱数据 / 统计 API
 │       ├── rag/
 │       │   ├── parsers.py        # 文档解析
 │       │   ├── chunkers.py       # 智能切分
 │       │   ├── embedder.py       # Embedding
 │       │   ├── reranker.py       # Rerank
 │       │   ├── retriever.py      # 混合检索 + RRF
+│       │   ├── extractor.py      # LLM 实体/关系抽取
+│       │   ├── graph_store.py    # Neo4j 图存储
+│       │   ├── graph_retriever.py# 图谱子图检索
 │       │   ├── generator.py      # Prompt + LLM
 │       │   └── vector_store.py   # Milvus 封装
 │       └── services/
@@ -161,15 +170,17 @@ agent-rag/
 ```bash
 export LLM_API_KEY=sk-your-deepseek-key
 export SILICONFLOW_API_KEY=sk-your-siliconflow-key
+export NEO4J_PASSWORD=neo4jrag   # 可选，默认 neo4jrag
 docker compose up -d --build
 # 前端 http://localhost    默认账号 admin / admin123
+# Neo4j Browser http://localhost:7474（账号 neo4j）
 ```
 
 ### 方式二：本地开发
 
 ```bash
 # 1. 启动中间件
-docker compose up -d mysql minio etcd milvus
+docker compose up -d mysql minio etcd milvus neo4j
 
 # 2. Python AI 层
 cd agent-rag-python
@@ -199,6 +210,14 @@ RAG_SILICONFLOW_API_KEY=sk-your-key
 RAG_LLM_API_KEY=sk-your-key
 RAG_LLM_BASE_URL=https://api.deepseek.com
 RAG_LLM_MODEL=deepseek-chat
+
+# 知识图谱（Neo4j；RAG_GRAPH_ENABLED=false 即退回纯向量 RAG）
+RAG_GRAPH_ENABLED=true
+RAG_NEO4J_URI=bolt://127.0.0.1:7687
+RAG_NEO4J_USER=neo4j
+RAG_NEO4J_PASSWORD=neo4jrag
+RAG_GRAPH_MAX_HOPS=2
+RAG_GRAPH_TOP_K=8
 ```
 
 ## 页面功能
@@ -209,3 +228,7 @@ RAG_LLM_MODEL=deepseek-chat
 | 知识库管理 | `/kb` | 创建/删除知识库、上传文档、查看解析状态 |
 | 全链路追溯 | `/trace` | 选择知识库输入 query → 追溯 Embedding → 向量检索 → RRF → Rerank → LLM Prompt 全流程中间数据 |
 | 向量库 | `/storage` | 下拉选择文档 → 查看在 Milvus 中的存储格式（chunk 结构、metadata、向量维度） |
+| 知识图谱 | `/graph` | 实体-关系图谱可视化：缩放/平移/拖拽、点击查看详情、关键词高亮、规模统计；入库自动建图 |
+
+> 文档入库后 Python 层自动用 LLM 抽取实体/关系写入 Neo4j，问答时图谱通道与向量通道做 RRF 融合
+> （检索调试新增 `graph_hits`）。设计详见 [doc/10-知识图谱设计.md](doc/10-知识图谱设计.md)。

@@ -1,4 +1,4 @@
-import { MessageOutlined, DatabaseOutlined, LogoutOutlined, EyeOutlined, FolderOpenOutlined, HistoryOutlined, EditOutlined } from '@ant-design/icons'
+import { MessageOutlined, DatabaseOutlined, LogoutOutlined, EyeOutlined, FolderOpenOutlined, HistoryOutlined, EditOutlined, ApartmentOutlined } from '@ant-design/icons'
 import { App as AntdApp, Layout, Menu, Button, Space } from 'antd'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { getToken } from './api/client'
@@ -10,6 +10,7 @@ import TracePage from './pages/TracePage'
 import StoragePage from './pages/StoragePage'
 import RewritePage from './pages/RewritePage'
 import HistoryPage from './pages/HistoryPage'
+import GraphPage from './pages/GraphPage'
 
 const { Header, Content } = Layout
 
@@ -26,6 +27,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     : location.pathname.startsWith('/storage') ? 'storage'
     : location.pathname.startsWith('/rewrites') ? 'rewrites'
     : location.pathname.startsWith('/conversations') ? 'conversations'
+    : location.pathname.startsWith('/graph') ? 'graph'
     : 'chat'
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -43,6 +45,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             { key: 'kb', icon: <DatabaseOutlined />, label: <Link to="/kb">知识库管理</Link> },
             { key: 'trace', icon: <EyeOutlined />, label: <Link to="/trace">追溯</Link> },
             { key: 'storage', icon: <FolderOpenOutlined />, label: <Link to="/storage">向量库</Link> },
+            { key: 'graph', icon: <ApartmentOutlined />, label: <Link to="/graph">知识图谱</Link> },
             { key: 'rewrites', icon: <EditOutlined />, label: <Link to="/rewrites">改写记录</Link> },
             { key: 'conversations', icon: <HistoryOutlined />, label: <Link to="/conversations">对话记录</Link> },
           ]}
@@ -101,6 +104,16 @@ export default function App() {
             <RequireAuth>
               <Shell>
                 <StoragePage />
+              </Shell>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/graph"
+          element={
+            <RequireAuth>
+              <Shell>
+                <GraphPage />
               </Shell>
             </RequireAuth>
           }
