@@ -1,9 +1,9 @@
 package com.example.rag.module.kb;
 
 import com.example.rag.common.Result;
+import com.example.rag.common.AuthDefaults;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,9 +30,8 @@ public class DocumentController {
 
     @PostMapping("/kb/{kbId}/documents")
     public Result<KbDocument> upload(@PathVariable Long kbId,
-                                     @RequestParam("file") MultipartFile file,
-                                     @AuthenticationPrincipal Long userId) throws Exception {
-        return Result.ok(documentService.upload(kbId, file, userId));
+                                     @RequestParam("file") MultipartFile file) throws Exception {
+        return Result.ok(documentService.upload(kbId, file, AuthDefaults.DEFAULT_USER_ID));
     }
 
     @DeleteMapping("/documents/{id}")

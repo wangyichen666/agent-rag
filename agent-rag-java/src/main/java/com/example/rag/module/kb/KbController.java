@@ -1,10 +1,10 @@
 package com.example.rag.module.kb;
 
 import com.example.rag.common.Result;
+import com.example.rag.common.AuthDefaults;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,14 +24,13 @@ public class KbController {
     private final KbService kbService;
 
     @GetMapping
-    public Result<List<Kb>> list(@AuthenticationPrincipal Long userId) {
-        return Result.ok(kbService.listVisible(userId));
+    public Result<List<Kb>> list() {
+        return Result.ok(kbService.listVisible(AuthDefaults.DEFAULT_USER_ID));
     }
 
     @PostMapping
-    public Result<Kb> create(@AuthenticationPrincipal Long userId,
-                             @Validated @RequestBody CreateKbRequest req) {
-        return Result.ok(kbService.createKb(req.getName(), req.getDescription(), userId));
+    public Result<Kb> create(@Validated @RequestBody CreateKbRequest req) {
+        return Result.ok(kbService.createKb(req.getName(), req.getDescription(), AuthDefaults.DEFAULT_USER_ID));
     }
 
     @GetMapping("/{id}")

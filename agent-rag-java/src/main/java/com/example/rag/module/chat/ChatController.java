@@ -1,6 +1,7 @@
 package com.example.rag.module.chat;
 
 import com.example.rag.common.Result;
+import com.example.rag.common.AuthDefaults;
 import com.example.rag.infra.ai.AiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.constraints.NotBlank;
@@ -8,7 +9,6 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,36 +30,31 @@ public class ChatController {
     private final AiClient aiClient;
 
     @GetMapping("/conversations")
-    public Result<List<Conversation>> conversations(@AuthenticationPrincipal Long userId) {
-        return Result.ok(chatService.listConversations(userId));
+    public Result<List<Conversation>> conversations() {
+        return Result.ok(chatService.listConversations(AuthDefaults.DEFAULT_USER_ID));
     }
 
     @PostMapping("/conversations")
-    public Result<Conversation> createConversation(@AuthenticationPrincipal Long userId,
-                                                   @Validated @RequestBody CreateConversationRequest req) {
-        return Result.ok(chatService.createConversation(userId, req.getKbIds()));
+    public Result<Conversation> createConversation(@Validated @RequestBody CreateConversationRequest req) {
+        return Result.ok(chatService.createConversation(AuthDefaults.DEFAULT_USER_ID, req.getKbIds()));
     }
 
     @GetMapping("/conversations/{id}/messages")
-    public Result<List<ChatMessage>> messages(@PathVariable Long id,
-                                              @AuthenticationPrincipal Long userId) {
-        return Result.ok(chatService.listMessages(id, userId));
+    public Result<List<ChatMessage>> messages(@PathVariable Long id) {
+        return Result.ok(chatService.listMessages(id, AuthDefaults.DEFAULT_USER_ID));
     }
 
     /** 问答：SSE 透传（前端协议与 Python 一致：meta/token/done/error）。 */
     @PostMapping(value = "/chat/completions", produces = "text/event-stream")
-    public SseEmitter chat(@AuthenticationPrincipal Long userId,
-                           @Validated @RequestBody ChatRequestBody req) {
-        return chatService.chat(req.getConversationId(), req.getQuestion(), userId);
+    public SseEmitter chat(@Validated @RequestBody ChatRequestBody req) {
+        return chatService.chat(req.getConversationId(), req.getQuestion(), AuthDefaults.DEFAULT_USER_ID);
     }
 
     @PostMapping("/messages/{id}/feedback")
-    public Result<Void> feedback(@PathVariable Long id,
-                                 @AuthenticationPrincipal Long userId,
-                                 @RequestBody Map<String, Object> body) {
+    public Result<Void> feedback(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         Integer feedback = body.get("feedback") == null ? null : ((Number) body.get("feedback")).intValue();
         String note = (String) body.getOrDefault("note", null);
-        chatService.feedback(id, feedback, note, userId);
+        chatService.feedback(id, feedback, note, AuthDefaults.DEFAULT_USER_ID);
         return Result.ok();
     }
 

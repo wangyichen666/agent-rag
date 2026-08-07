@@ -172,9 +172,12 @@ export LLM_API_KEY=sk-your-deepseek-key
 export SILICONFLOW_API_KEY=sk-your-siliconflow-key
 export NEO4J_PASSWORD=neo4jrag   # 可选，默认 neo4jrag
 docker compose up -d --build
-# 前端 http://localhost    默认账号 admin / admin123
+# 前端 http://localhost    免登录，直接进入对话页
 # Neo4j Browser http://localhost:7474（账号 neo4j）
 ```
+
+> 当前为**免登录模式**：后端不校验 JWT，所有业务接口使用管理员账号（id=1）；
+> 前端无登录页。如需恢复登录，改回 JWT 过滤器与登录页即可。
 
 ### 方式二：本地开发
 

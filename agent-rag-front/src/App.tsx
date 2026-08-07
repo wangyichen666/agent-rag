@@ -1,11 +1,8 @@
-import { MessageOutlined, DatabaseOutlined, LogoutOutlined, EyeOutlined, FolderOpenOutlined, HistoryOutlined, EditOutlined, ApartmentOutlined } from '@ant-design/icons'
-import { App as AntdApp, Layout, Menu, Button, Space } from 'antd'
-import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { getToken } from './api/client'
-import { useAuthStore } from './stores/auth'
+import { MessageOutlined, DatabaseOutlined, EyeOutlined, FolderOpenOutlined, HistoryOutlined, EditOutlined, ApartmentOutlined } from '@ant-design/icons'
+import { App as AntdApp, Layout, Menu } from 'antd'
+import { Link, Route, Routes, useLocation } from 'react-router-dom'
 import ChatPage from './pages/ChatPage'
 import KbPage from './pages/KbPage'
-import LoginPage from './pages/LoginPage'
 import TracePage from './pages/TracePage'
 import StoragePage from './pages/StoragePage'
 import RewritePage from './pages/RewritePage'
@@ -14,14 +11,8 @@ import GraphPage from './pages/GraphPage'
 
 const { Header, Content } = Layout
 
-function RequireAuth({ children }: { children: JSX.Element }) {
-  if (!getToken()) return <Navigate to="/login" replace />
-  return children
-}
-
 function Shell({ children }: { children: React.ReactNode }) {
   const location = useLocation()
-  const logout = useAuthStore((s) => s.logout)
   const selected = location.pathname.startsWith('/kb') ? 'kb'
     : location.pathname.startsWith('/trace') ? 'trace'
     : location.pathname.startsWith('/storage') ? 'storage'
@@ -50,11 +41,6 @@ function Shell({ children }: { children: React.ReactNode }) {
             { key: 'conversations', icon: <HistoryOutlined />, label: <Link to="/conversations">对话记录</Link> },
           ]}
         />
-        <Space>
-          <Button type="text" icon={<LogoutOutlined />} style={{ color: '#fff' }} onClick={logout}>
-            退出
-          </Button>
-        </Space>
       </Header>
       <Content style={{ padding: 16, height: 'calc(100vh - 64px)', overflow: 'auto' }}>
         {children}
@@ -67,77 +53,13 @@ export default function App() {
   return (
     <AntdApp>
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route
-          path="/"
-          element={
-            <RequireAuth>
-              <Shell>
-                <ChatPage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/kb"
-          element={
-            <RequireAuth>
-              <Shell>
-                <KbPage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/trace"
-          element={
-            <RequireAuth>
-              <Shell>
-                <TracePage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/storage"
-          element={
-            <RequireAuth>
-              <Shell>
-                <StoragePage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/graph"
-          element={
-            <RequireAuth>
-              <Shell>
-                <GraphPage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/rewrites"
-          element={
-            <RequireAuth>
-              <Shell>
-                <RewritePage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/conversations"
-          element={
-            <RequireAuth>
-              <Shell>
-                <HistoryPage />
-              </Shell>
-            </RequireAuth>
-          }
-        />
+        <Route path="/" element={<Shell><ChatPage /></Shell>} />
+        <Route path="/kb" element={<Shell><KbPage /></Shell>} />
+        <Route path="/trace" element={<Shell><TracePage /></Shell>} />
+        <Route path="/storage" element={<Shell><StoragePage /></Shell>} />
+        <Route path="/graph" element={<Shell><GraphPage /></Shell>} />
+        <Route path="/rewrites" element={<Shell><RewritePage /></Shell>} />
+        <Route path="/conversations" element={<Shell><HistoryPage /></Shell>} />
       </Routes>
     </AntdApp>
   )

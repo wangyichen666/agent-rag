@@ -1,5 +1,3 @@
-import { getToken } from './client'
-
 export interface SseHandlers {
   onMeta?: (data: any) => void
   onToken?: (delta: string) => void
@@ -21,7 +19,6 @@ export async function streamChat(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken()}`,
       Accept: 'text/event-stream',
     },
     body: JSON.stringify(body),
