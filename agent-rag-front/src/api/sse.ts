@@ -35,6 +35,7 @@ export async function streamChat(
   let buffer = ''
   let currentEvent = 'message'
   let dataLines: string[] = []
+  let finished = false
 
   const dispatch = () => {
     if (dataLines.length === 0) return
@@ -55,9 +56,11 @@ export async function streamChat(
         break
       case 'done':
         handlers.onDone?.(data)
+        finished = true
         break
       case 'error':
         handlers.onError?.(data?.code ?? 'UNKNOWN', data?.message ?? '未知错误')
+        finished = true
         break
     }
     currentEvent = 'message'
@@ -78,6 +81,16 @@ export async function streamChat(
       } else if (line.startsWith('data:')) {
         dataLines.push(line.slice(5).trim())
       }
+    }
+    // done/error 是 SSE 协议的终止事件：主动关闭读取端，
+    // 不依赖服务端/代理关闭连接（Vite 代理可能一直不关）
+    if (finished) {
+      try {
+        await reader.cancel()
+      } catch {
+        // 已关闭则忽略
+      }
+      break
     }
   }
   dispatch()

@@ -53,7 +53,8 @@ async def chat_event_stream(req: ChatRequest, deps) -> AsyncIterator[str]:
         ) if settings.graph_enabled else None
         candidates = await hybrid_retrieve(deps.store, deps.embedder, req.kb_ids,
                                            rewritten, settings, dense_top_k, sparse_top_k)
-        graph_cands = await graph_task if graph_task is not None else []
+        graph_result = await graph_task if graph_task is not None else None
+        graph_cands = graph_result.hits if graph_result is not None else []
         if graph_cands:
             candidates = fuse_graph(candidates, graph_cands, settings.rrf_k)
         dense_hits = sum(1 for c in candidates if c.dense_rank is not None)

@@ -1,6 +1,6 @@
 import { ReloadOutlined, ZoomInOutlined, ZoomOutOutlined, CompressOutlined } from '@ant-design/icons'
 import {
-  App, Button, Card, Descriptions, Empty, Input, Select, Space, Spin, Statistic,
+  App, Button, Card, Checkbox, Descriptions, Empty, Input, Select, Space, Spin, Statistic,
   Tag, Typography,
 } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -58,61 +58,127 @@ function colorOf(type: string): string {
 
 interface Pos { x: number; y: number }
 
-function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, Pos> {
+/**
+ * 按实体类型分列布局（替代力导向）：
+ * 同类型实体排在同一列（按度数降序、上下错位两排），类型间用列隔开，
+ * 结构清晰且天然避免节点/标签互相挤压。出处块统一放底部一行。
+ */
+function groupedLayout(nodes: GraphNode[], edges: GraphEdge[]): Map<string, Pos> {
   const pos = new Map<string, Pos>()
-  const n = nodes.length
-  const cx = VIEW_W / 2
-  const cy = VIEW_H / 2
-  const radius = Math.max(180, Math.sqrt(Math.max(n, 1)) * 46)
-  nodes.forEach((nd, i) => {
-    const angle = (i / Math.max(n, 1)) * Math.PI * 2
-    pos.set(nd.id, { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) })
+  const degree = new Map<string, number>()
+  for (const e of edges) {
+    degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+    degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
+  }
+
+  const entities = nodes.filter(n => n.kind === 'entity')
+  const chunks = nodes.filter(n => n.kind === 'chunk')
+
+  // 类型分组：最多 6 个主类型，其余并入"其他"
+  const typeCount = new Map<string, number>()
+  for (const nd of entities) {
+    const t = nd.entity_type || '未分类'
+    typeCount.set(t, (typeCount.get(t) ?? 0) + 1)
+  }
+  const topTypes = [...typeCount.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([t]) => t)
+  const groups = new Map<string, GraphNode[]>()
+  for (const nd of entities) {
+    let t = nd.entity_type || '未分类'
+    if (!topTypes.includes(t)) t = '其他'
+    const list = groups.get(t) ?? []
+    list.push(nd)
+    groups.set(t, list)
+  }
+  const groupNames = [...groups.keys()]
+    .sort((a, b) => groups.get(b)!.length - groups.get(a)!.length)
+
+  const colW = VIEW_W / groupNames.length
+  groupNames.forEach((g, gi) => {
+    const list = groups.get(g)!.sort((a, b) =>
+      (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0))
+    const cx = colW * (gi + 0.5)
+    list.forEach((nd, i) => {
+      const y = VIEW_H * (i + 1) / (list.length + 1)
+      const x = cx + (i % 2 === 0 ? -colW * 0.18 : colW * 0.18)
+      pos.set(nd.id, { x, y })
+    })
   })
 
-  // 简易力导向：斥力 + 弹簧 + 向心
-  const repulsion = 260000
-  const spring = 0.02
-  const ideal = 90
-  for (let iter = 0; iter < 140; iter++) {
-    const arr = Array.from(pos.entries())
-    for (let i = 0; i < arr.length; i++) {
-      for (let j = i + 1; j < arr.length; j++) {
-        const [ida, a] = arr[i]
-        const [idb, b] = arr[j]
-        const dx = a.x - b.x
-        const dy = a.y - b.y
-        const d2 = Math.max(dx * dx + dy * dy, 1)
-        const f = Math.min(repulsion / d2, 60)
-        const d = Math.sqrt(d2)
-        const fx = (dx / d) * f
-        const fy = (dy / d) * f
-        pos.set(ida, { x: a.x + fx, y: a.y + fy })
-        pos.set(idb, { x: b.x - fx, y: b.y - fy })
-      }
-    }
-    for (const e of edges) {
-      const a = pos.get(e.source)
-      const b = pos.get(e.target)
-      if (!a || !b) continue
-      const dx = b.x - a.x
-      const dy = b.y - a.y
-      const d = Math.sqrt(dx * dx + dy * dy) || 1
-      const f = (d - ideal) * spring
-      const fx = (dx / d) * f
-      const fy = (dy / d) * f
-      pos.set(e.source, { x: a.x + fx, y: a.y + fy })
-      pos.set(e.target, { x: b.x - fx, y: b.y - fy })
-    }
-    for (const [id, p] of pos) {
-      const gx = (cx - p.x) * 0.012
-      const gy = (cy - p.y) * 0.012
-      pos.set(id, { x: p.x + gx, y: p.y + gy })
-    }
-  }
+  // 出处块：底部一行
+  chunks.forEach((nd, i) => {
+    pos.set(nd.id, { x: VIEW_W * (i + 1) / (chunks.length + 1), y: VIEW_H - 26 })
+  })
   return pos
 }
 
 interface Selected { type: 'node' | 'edge'; node?: GraphNode; edge?: GraphEdge }
+
+// ---------- 标签碰撞检测 ----------
+
+interface Rect { x: number; y: number; w: number; h: number }
+
+function truncateLabel(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max) + '…' : text
+}
+
+function labelSize(text: string, fontSize: number): { w: number; h: number } {
+  let cjk = 0
+  let latin = 0
+  for (const ch of text) {
+    if (ch.charCodeAt(0) > 127) cjk++
+    else latin++
+  }
+  return { w: cjk * fontSize + latin * fontSize * 0.62 + 6, h: fontSize + 4 }
+}
+
+function rectsOverlap(a: Rect, b: Rect, pad = 2): boolean {
+  return a.x < b.x + b.w + pad && a.x + a.w + pad > b.x
+    && a.y < b.y + b.h + pad && a.y + a.h + pad > b.y
+}
+
+/** 计算哪些实体标签可以显示：不与任何节点/其他标签重叠才保留。 */
+function visibleEntityLabels(nodes: GraphNode[], positions: Map<string, Pos>,
+                             edges: GraphEdge[]): Set<string> {
+  const circles = nodes
+    .map(nd => {
+      const p = positions.get(nd.id)
+      return p ? { id: nd.id, kind: nd.kind, x: p.x, y: p.y, r: nd.kind === 'entity' ? 11 : 7 } : null
+    })
+    .filter((c): c is { id: string; kind: GraphNode['kind']; x: number; y: number; r: number } => c !== null)
+
+  const degree = new Map<string, number>()
+  for (const e of edges) {
+    degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+    degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
+  }
+  const nodesById = new Map(nodes.map(nd => [nd.id, nd]))
+  const entities = circles
+    .filter(c => c.kind === 'entity')
+    .sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0))
+
+  const kept: Rect[] = []
+  const visible = new Set<string>()
+  for (const c of entities) {
+    const label = truncateLabel(nodesById.get(c.id)?.label ?? '', 12)
+    if (!label) continue
+    const { w, h } = labelSize(label, 12)
+    const rect: Rect = { x: c.x - w / 2, y: c.y + c.r + 6, w, h }
+    // 标签压到任何节点圆 → 隐藏
+    const hitNode = circles.some(other => {
+      if (other.id === c.id) return false
+      return rectsOverlap(rect, { x: other.x - other.r, y: other.y - other.r, w: other.r * 2, h: other.r * 2 }, 3)
+    })
+    if (hitNode) continue
+    // 与其他已保留标签重叠 → 隐藏
+    if (kept.some(r => rectsOverlap(r, rect, 4))) continue
+    kept.push(rect)
+    visible.add(c.id)
+  }
+  return visible
+}
 
 // ---------- 图谱画布 ----------
 
@@ -130,6 +196,7 @@ function GraphCanvas({
 }) {
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [hoverId, setHoverId] = useState<string | null>(null)
   const drag = useRef<{ mode: 'pan' | 'node'; id?: string; startX: number; startY: number; panX: number; panY: number; nodeX: number; nodeY: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -154,6 +221,11 @@ function GraphCanvas({
     }
     return s
   }, [selected, edges])
+
+  const visibleLabels = useMemo(
+    () => visibleEntityLabels(nodes, positions, edges),
+    [nodes, positions, edges],
+  )
 
   const toScreen = (p: Pos): Pos => ({
     x: p.x * zoom + pan.x,
@@ -219,6 +291,7 @@ function GraphCanvas({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onWheel={onWheel}
+        onMouseLeave={() => setHoverId(null)}
       >
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="16" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -230,6 +303,7 @@ function GraphCanvas({
             const a = positions.get(edge.source)
             const b = positions.get(edge.target)
             if (!a || !b) return null
+            const len = Math.hypot(b.x - a.x, b.y - a.y)
             const active = selected?.edge === edge || (selected?.node && (related.has(edge.source) && related.has(edge.target)))
             const isRelates = edge.kind === 'relates'
             const stroke = active ? '#1677ff' : isRelates ? '#8c8c8c' : '#d9d9d9'
@@ -246,13 +320,13 @@ function GraphCanvas({
                   onMouseEnter={e => { e.currentTarget.style.strokeWidth = '2.4' }}
                   onMouseLeave={e => { e.currentTarget.style.strokeWidth = active ? '2.4' : '1.2' }}
                 />
-                {isRelates && edge.label && zoom > 0.6 && (
+                {isRelates && edge.label && (selected?.edge === edge || (zoom >= 0.9 && len >= 130)) && (
                   <text
                     x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 4}
                     fontSize={11} fill="#595959" textAnchor="middle"
-                    style={{ pointerEvents: 'none' }}
+                    style={{ pointerEvents: 'none', userSelect: 'none', paintOrder: 'stroke', stroke: '#fff', strokeWidth: 3, strokeLinejoin: 'round' }}
                   >
-                    {edge.label.length > 14 ? edge.label.slice(0, 14) + '…' : edge.label}
+                    {truncateLabel(edge.label, 12)}
                   </text>
                 )}
               </g>
@@ -266,23 +340,34 @@ function GraphCanvas({
             const dim = dimmed.has(nd.id)
             const fill = isEntity ? colorOf(nd.entity_type || '') : '#d3adf7'
             const sel = selected?.node?.id === nd.id
+            const hovered = hoverId === nd.id
+            const dimByHover = hoverId != null && !hovered && !sel && !related.has(nd.id)
+            const showLabel = isEntity
+              ? (hovered || sel || (zoom >= 0.7 && visibleLabels.has(nd.id)))
+              : (hovered || sel)
             return (
               <g
                 key={nd.id}
                 data-node-id={nd.id}
-                style={{ cursor: 'grab', opacity: dim ? 0.18 : 1 }}
+                style={{ cursor: 'grab', opacity: dim ? 0.18 : dimByHover ? 0.4 : 1 }}
                 onClick={e => { e.stopPropagation(); onSelect({ type: 'node', node: nd }) }}
+                onMouseEnter={() => setHoverId(nd.id)}
+                onMouseLeave={() => setHoverId(h => (h === nd.id ? null : h))}
               >
                 <circle cx={p.x} cy={p.y} r={r + (sel ? 4 : 0)}
                         fill={fill} fillOpacity={0.85}
                         stroke={sel ? '#fa8c16' : '#fff'} strokeWidth={sel ? 3 : 1.5} />
-                <text
-                  x={p.x} y={p.y + r + 12}
-                  fontSize={isEntity ? 12 : 9} fill="#262626" textAnchor="middle"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  {isEntity ? nd.label : '块'}
-                </text>
+                {showLabel && (
+                  <text
+                    x={p.x} y={p.y + r + 12}
+                    fontSize={isEntity ? 12 : 10}
+                    fill={isEntity ? '#262626' : '#722ed1'}
+                    textAnchor="middle"
+                    style={{ pointerEvents: 'none', userSelect: 'none', paintOrder: 'stroke', stroke: '#fff', strokeWidth: 3, strokeLinejoin: 'round' }}
+                  >
+                    {isEntity ? truncateLabel(nd.label, 12) : truncateLabel(nd.id.slice(2), 18)}
+                  </text>
+                )}
               </g>
             )
           })}
@@ -304,6 +389,8 @@ export default function GraphPage() {
   const [keyword, setKeyword] = useState('')
   const [selected, setSelected] = useState<Selected | null>(null)
   const [positions, setPositions] = useState<Map<string, Pos>>(new Map())
+  const [showChunks, setShowChunks] = useState(false)
+  const [maxEntities, setMaxEntities] = useState(100)
 
   const load = async (kbId: number | null) => {
     if (kbId === null) {
@@ -321,11 +408,6 @@ export default function GraphPage() {
       setStats(s)
       setSelected(null)
       setKeyword('')
-      if (g.enabled && g.nodes.length > 0) {
-        setPositions(computeLayout(g.nodes, g.edges))
-      } else {
-        setPositions(new Map())
-      }
     } catch (err) {
       message.error((err as Error).message || '图谱加载失败')
     } finally {
@@ -334,11 +416,20 @@ export default function GraphPage() {
   }
 
   useEffect(() => {
-    api.get<Kb[]>('/api/kb').then(list => {
+    api.get<Kb[]>('/api/kb').then(async list => {
       setKbs(list)
-      if (list.length > 0) {
-        setSelectedKbId(list[0].id)
-      }
+      if (list.length === 0) return
+      // 优先选择已有图谱数据的知识库（避免默认选中空库造成"没有数据"的困惑）
+      const statsList = await Promise.all(list.map(async kb => {
+        try {
+          const s = await api.get<GraphStats>(`/api/kb/${kb.id}/graph/stats`)
+          return { kb, entityCount: s.entity_count ?? 0 }
+        } catch {
+          return { kb, entityCount: 0 }
+        }
+      }))
+      const picked = statsList.find(x => x.entityCount > 0)?.kb ?? list[0]
+      setSelectedKbId(picked.id)
     }).catch(() => {})
   }, [])
 
@@ -346,6 +437,71 @@ export default function GraphPage() {
     void load(selectedKbId)
   }, [selectedKbId])
 
+  // 按度数取前 N 个实体；可选是否显示出处块
+  const visibleEntities = useMemo(() => {
+    const all = (graph?.nodes ?? []).filter(n => n.kind === 'entity')
+    if (!maxEntities || all.length <= maxEntities) return all
+    const degree = new Map<string, number>()
+    for (const e of graph?.edges ?? []) {
+      if (e.kind !== 'relates') continue
+      degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+      degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
+    }
+    return [...all]
+      .sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0))
+      .slice(0, maxEntities)
+  }, [graph, maxEntities])
+
+  const visibleIds = useMemo(
+    () => new Set(visibleEntities.map(n => n.id)),
+    [visibleEntities],
+  )
+
+  const visibleChunks = useMemo(() => {
+    if (!showChunks || !graph) return []
+    const chunkIds = new Set<string>()
+    for (const e of graph.edges) {
+      if (e.kind === 'mentioned' && visibleIds.has(e.source)) chunkIds.add(e.target)
+    }
+    return graph.nodes.filter(n => n.kind === 'chunk' && chunkIds.has(n.id))
+  }, [graph, showChunks, visibleIds])
+
+  const visibleChunkIds = useMemo(
+    () => new Set(visibleChunks.map(n => n.id)),
+    [visibleChunks],
+  )
+
+  const visibleNodes = useMemo(
+    () => [...visibleEntities, ...visibleChunks],
+    [visibleEntities, visibleChunks],
+  )
+
+  const visibleEdges = useMemo(
+    () => (graph?.edges ?? []).filter(e =>
+      e.kind === 'relates'
+        ? visibleIds.has(e.source) && visibleIds.has(e.target)
+        : showChunks && visibleIds.has(e.source) && visibleChunkIds.has(e.target)),
+    [graph, visibleIds, visibleChunkIds, showChunks],
+  )
+
+  useEffect(() => {
+    if (visibleNodes.length === 0) {
+      setPositions(new Map())
+      return
+    }
+    setPositions(groupedLayout(visibleNodes, visibleEdges))
+  }, [visibleNodes, visibleEdges])
+
+  const legend = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const nd of visibleEntities) {
+      const t = nd.entity_type || '未分类'
+      m.set(t, (m.get(t) ?? 0) + 1)
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+  }, [visibleEntities])
+
+  const totalEntities = graph?.nodes.filter(n => n.kind === 'entity').length ?? 0
   const empty = !graph || !graph.enabled || graph.nodes.length === 0
   const entityCount = stats?.entity_count ?? graph?.nodes.filter(n => n.kind === 'entity').length ?? 0
 
@@ -373,6 +529,20 @@ export default function GraphPage() {
             onChange={e => setKeyword(e.target.value)}
             allowClear
           />
+          <Select
+            style={{ width: 150 }}
+            value={maxEntities}
+            onChange={setMaxEntities}
+            options={[
+              { value: 50, label: '核心 50 个实体' },
+              { value: 100, label: '核心 100 个实体' },
+              { value: 200, label: '核心 200 个实体' },
+              { value: 0, label: '全部实体' },
+            ]}
+          />
+          <Checkbox checked={showChunks} onChange={e => setShowChunks(e.target.checked)}>
+            显示出处块
+          </Checkbox>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load(selectedKbId)}>
             刷新
           </Button>
@@ -391,6 +561,18 @@ export default function GraphPage() {
           <Statistic title="出处块" value={stats?.chunk_count ?? 0} />
         </Card>
       </Space>
+
+      {legend.length > 0 && (
+        <Space wrap style={{ margin: '0 0 12px' }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>按类型分列：</Text>
+          {legend.map(([t, count]) => (
+            <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: colorOf(t), display: 'inline-block' }} />
+              {t} ({count})
+            </span>
+          ))}
+        </Space>
+      )}
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
@@ -417,9 +599,15 @@ export default function GraphPage() {
                 图谱较大，当前只展示部分节点（limit=400），可在 Neo4j Browser 中查看完整数据
               </Text>
             )}
+            {maxEntities > 0 && totalEntities > maxEntities && (
+              <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                当前展示度数最高的 {visibleEntities.length} / {totalEntities} 个实体
+                （可在右上角"核心实体"下拉调整）
+              </Text>
+            )}
             <GraphCanvas
-              nodes={graph!.nodes}
-              edges={graph!.edges}
+              nodes={visibleNodes}
+              edges={visibleEdges}
               positions={positions}
               keyword={keyword}
               selected={selected}
@@ -427,7 +615,7 @@ export default function GraphPage() {
               onLayoutChanged={pos => setPositions(new Map(pos))}
             />
             <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-              拖拽空白处平移 · 滚轮缩放 · 拖拽节点调整布局 · 点击节点/关系查看详情
+              同类型实体按列排布 · 拖拽空白处平移 · 滚轮缩放 · 拖拽节点调整布局 · 点击查看详情
             </Text>
           </div>
 
@@ -443,23 +631,49 @@ export default function GraphPage() {
                   {selected.node.entity_type && <Tag>{selected.node.entity_type}</Tag>}
                 </Space>
                 <Title level={5} style={{ marginTop: 12 }}>{selected.node.label}</Title>
-                <Descriptions column={1} size="small" style={{ marginTop: 8 }}>
-                  {selected.node.kind === 'entity' && (
-                    <Descriptions.Item label="类型">
-                      {selected.node.entity_type || '未知'}
+                {selected.node.kind === 'entity' ? (() => {
+                  const nodeId = selected.node!.id
+                  const rels = (graph?.edges ?? []).filter(e =>
+                    e.kind === 'relates' && (e.source === nodeId || e.target === nodeId))
+                  const chunks = (graph?.edges ?? []).filter(e =>
+                    e.kind === 'mentioned' && e.source === nodeId)
+                  const otherLabel = (e: GraphEdge) =>
+                    (e.source === nodeId ? e.target : e.source).replace(/^e:/, '')
+                  return (
+                    <div style={{ fontSize: 12, lineHeight: 1.9 }}>
+                      <Text type="secondary">直接关系（{rels.length} 条）</Text>
+                      <div style={{ maxHeight: 220, overflow: 'auto', margin: '4px 0 12px' }}>
+                        {rels.slice(0, 40).map((e, i) => (
+                          <div key={i}>
+                            <span style={{ color: '#595959' }}>
+                              {e.source === nodeId ? '→' : '←'} {e.label || '相关'}
+                            </span>{' '}
+                            <Text>{otherLabel(e)}</Text>
+                          </div>
+                        ))}
+                        {rels.length > 40 && <Text type="secondary">… 其余 {rels.length - 40} 条</Text>}
+                      </div>
+                      <Text type="secondary">出处块（{chunks.length} 个）</Text>
+                      <div style={{ maxHeight: 160, overflow: 'auto', margin: '4px 0 0' }}>
+                        {chunks.slice(0, 12).map((e, i) => (
+                          <div key={i} style={{ color: '#8c8c8c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {e.target.slice(2)} · {e.label || ''}
+                          </div>
+                        ))}
+                        {chunks.length > 12 && <Text type="secondary">… 其余 {chunks.length - 12} 个</Text>}
+                      </div>
+                    </div>
+                  )
+                })() : (
+                  <Descriptions column={1} size="small" style={{ marginTop: 8 }}>
+                    <Descriptions.Item label="文档">
+                      {selected.node.source_file || selected.node.doc_id || '-'}
                     </Descriptions.Item>
-                  )}
-                  {selected.node.kind === 'chunk' && (
-                    <>
-                      <Descriptions.Item label="文档">
-                        {selected.node.source_file || selected.node.doc_id || '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="块 ID">
-                        <Text copyable style={{ fontSize: 12 }}>{selected.node.id.slice(2)}</Text>
-                      </Descriptions.Item>
-                    </>
-                  )}
-                </Descriptions>
+                    <Descriptions.Item label="块 ID">
+                      <Text copyable style={{ fontSize: 12 }}>{selected.node.id.slice(2)}</Text>
+                    </Descriptions.Item>
+                  </Descriptions>
+                )}
               </div>
             ) : selected.edge ? (
               <div>

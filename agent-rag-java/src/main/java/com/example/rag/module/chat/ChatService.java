@@ -1,6 +1,7 @@
 package com.example.rag.module.chat;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.rag.common.BizException;
 import com.example.rag.infra.ai.AiClient;
 import com.example.rag.module.chat.mapper.ChatMessageMapper;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -155,8 +157,16 @@ public class ChatService {
             } catch (Exception e) {
                 log.error("chat stream error", e);
                 try {
+                    String errJson;
+                    try {
+                        errJson = om.writeValueAsString(Map.of(
+                                "code", "AI_SERVICE_ERROR",
+                                "message", String.valueOf(e.getMessage())));
+                    } catch (Exception ex) {
+                        errJson = "{\"code\":\"AI_SERVICE_ERROR\",\"message\":\"unknown\"}";
+                    }
                     emitter.send(SseEmitter.event().name("error")
-                            .data("{\"code\":\"AI_SERVICE_ERROR\",\"message\":\"" + e.getMessage() + "\"}"));
+                            .data(errJson));
                 } catch (Exception ignored) {
                 }
                 emitter.completeWithError(e);
@@ -175,9 +185,10 @@ public class ChatService {
             return;
         }
         saveMessage(conversationId, "assistant", content, traceId, citations, debug, rewrittenQuery, latencyMs);
-        Conversation touch = new Conversation();
-        touch.setId(conversationId);
-        conversationMapper.updateById(touch);  // 触发 updated_at 刷新
+        // 只刷新 updated_at，避免全字段 updateById 生成非法 SQL
+        conversationMapper.update(null, new LambdaUpdateWrapper<Conversation>()
+                .eq(Conversation::getId, conversationId)
+                .set(Conversation::getUpdatedAt, LocalDateTime.now()));
     }
 
     private void saveMessage(Long conversationId, String role, String content, String traceId,
@@ -252,6 +263,43 @@ public class ChatService {
                     "originalQuery", userMsg.getContent(),
                     "rewrittenQuery", assistMsg.getRewrittenQuery(),
                     "createdAt", assistMsg.getCreatedAt() != null ? assistMsg.getCreatedAt().toString() : ""
+            ));
+        }
+        return result;
+    }
+
+    /** 返回最近的历史用户查询（含 trace_id / 会话 / 知识库），用于追溯页列表。 */
+    public List<Map<String, Object>> listTraces() {
+        List<ChatMessage> userMsgs = messageMapper.selectList(new LambdaQueryWrapper<ChatMessage>()
+                .eq(ChatMessage::getRole, "user")
+                .isNotNull(ChatMessage::getTraceId)
+                .ne(ChatMessage::getTraceId, "")
+                .orderByDesc(ChatMessage::getId)
+                .last("limit 200"));
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (ChatMessage m : userMsgs) {
+            Conversation conv = conversationMapper.selectById(m.getConversationId());
+            if (conv == null) {
+                continue;
+            }
+            String rewrittenQuery = "";
+            ChatMessage assist = messageMapper.selectOne(new LambdaQueryWrapper<ChatMessage>()
+                    .eq(ChatMessage::getTraceId, m.getTraceId())
+                    .eq(ChatMessage::getRole, "assistant")
+                    .last("limit 1"));
+            if (assist != null && assist.getRewrittenQuery() != null
+                    && !assist.getRewrittenQuery().isBlank()) {
+                rewrittenQuery = assist.getRewrittenQuery();
+            }
+            result.add(Map.of(
+                    "messageId", m.getId(),
+                    "traceId", m.getTraceId() != null ? m.getTraceId() : "",
+                    "conversationId", m.getConversationId(),
+                    "conversationTitle", conv.getTitle() != null ? conv.getTitle() : "",
+                    "query", m.getContent(),
+                    "rewrittenQuery", rewrittenQuery,
+                    "kbIds", conv.getKbIds() != null ? conv.getKbIds() : "[]",
+                    "createdAt", m.getCreatedAt() != null ? m.getCreatedAt().toString() : ""
             ));
         }
         return result;

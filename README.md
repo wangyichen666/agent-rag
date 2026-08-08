@@ -229,7 +229,7 @@ RAG_GRAPH_TOP_K=8
 |---|---|---|
 | 对话 | `/` | 选择知识库 → 创建会话 → 流式问答（引用来源 + Markdown 渲染） |
 | 知识库管理 | `/kb` | 创建/删除知识库、上传文档、查看解析状态 |
-| 全链路追溯 | `/trace` | 选择知识库输入 query → 追溯 Embedding → 向量检索 → RRF → Rerank → LLM Prompt 全流程中间数据 |
+| 全链路追溯 | `/trace` | 选择知识库输入 query → 追溯 Embedding → 向量检索 → 图谱检索（实体/命中块）→ RRF 融合 → Rerank → LLM Prompt 全流程中间数据 |
 | 向量库 | `/storage` | 下拉选择文档 → 查看在 Milvus 中的存储格式（chunk 结构、metadata、向量维度） |
 | 知识图谱 | `/graph` | 实体-关系图谱可视化：缩放/平移/拖拽、点击查看详情、关键词高亮、规模统计；入库自动建图 |
 

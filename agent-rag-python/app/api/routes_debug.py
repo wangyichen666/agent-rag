@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from app.api.deps import AppDeps, get_deps
 from app.core.security import verify_internal_token
 from app.rag.generator import SYSTEM_PROMPT, _format_context_block, build_citations, trim_contexts
-from app.rag.retriever import Candidate, hybrid_retrieve, rank_candidates
+from app.rag.graph_retriever import graph_retrieve
+from app.rag.retriever import Candidate, fuse_graph, hybrid_retrieve, rank_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class CandidateItem(BaseModel):
     dense_rank: int | None = None
     dense_score: float | None = None
     sparse_rank: int | None = None
+    graph_rank: int | None = None
+    graph_hops: int = 0
     rrf_score: float = 0.0
     rerank_score: float | None = None
 
@@ -55,6 +58,18 @@ class DenseResultItem(BaseModel):
     rank: int
 
 
+class GraphHitItem(BaseModel):
+    """图谱通道命中的块。hop 为到问题实体的最短路径长度。"""
+    chunk_id: str
+    doc_id: str
+    source_file: str = ""
+    title_path: list[str] = Field(default_factory=list)
+    page: int | None = None
+    content: str
+    hop: int
+    score: float
+
+
 class DebugTraceResponse(BaseModel):
     query: str
     rewritten_query: str = ""
@@ -66,21 +81,28 @@ class DebugTraceResponse(BaseModel):
     dense_count: int = 0
     has_sparse: bool = False
 
-    # 阶段 2：RRF 融合
+    # 阶段 2：知识图谱检索
+    graph_entities: list[str] = Field(default_factory=list)
+    graph_entities_count: int = 0
+    graph_hits: list[GraphHitItem] = Field(default_factory=list)
+    graph_hits_count: int = 0
+    graph_skipped: str = ""
+
+    # 阶段 3：RRF 融合（dense + sparse + graph）
     rrf_candidates: list[CandidateItem] = Field(default_factory=list)
     rrf_count: int = 0
 
-    # 阶段 3：Rerank 精排
+    # 阶段 4：Rerank 精排
     rerank_candidates: list[CandidateItem] = Field(default_factory=list)
     rerank_degraded: bool = False
     rerank_count: int = 0
 
-    # 阶段 4：最终输出（阈值过滤后）
+    # 阶段 5：最终输出（阈值过滤后）
     final_candidates: list[CandidateItem] = Field(default_factory=list)
     final_count: int = 0
     threshold_applied: float = 0.0
 
-    # 阶段 5：组装后的 LLM Prompt（真正发给大模型的）
+    # 阶段 6：组装后的 LLM Prompt（真正发给大模型的）
     system_prompt: str = ""
     user_prompt: str = ""
     full_prompt: str = ""
@@ -118,11 +140,31 @@ async def debug_trace(req: DebugTraceRequest, deps: AppDeps = Depends(get_deps))
             score=h.score, rank=h.rank,
         ))
 
-    # 阶段 2：RRF 融合（走 retriever 的 RRF）
+    # 阶段 2：知识图谱检索（与 chat 链路一致：并行、失败降级）
+    graph_task = asyncio.create_task(
+        graph_retrieve(deps.graph_store, deps.llm, req.kb_ids, req.query, settings, None)
+    ) if settings.graph_enabled else None
     candidates = await hybrid_retrieve(
         deps.store, deps.embedder, req.kb_ids, req.query,
         settings, req.dense_top_k, req.sparse_top_k,
     )
+    graph_result = await graph_task if graph_task is not None else None
+    graph_cands = graph_result.hits if graph_result is not None else []
+    if graph_cands:
+        candidates = fuse_graph(candidates, graph_cands, settings.rrf_k)
+    graph_skipped = graph_result.skipped if graph_result is not None else "知识图谱功能未开启"
+
+    graph_hits: list[GraphHitItem] = []
+    for gc in graph_cands:
+        meta = gc.metadata or {}
+        graph_hits.append(GraphHitItem(
+            chunk_id=gc.chunk_id, doc_id=gc.doc_id,
+            source_file=meta.get("source_file", ""),
+            title_path=meta.get("title_path") or [],
+            page=meta.get("page"),
+            content=gc.content[:3000],
+            hop=gc.hop, score=gc.score,
+        ))
 
     rrf_items: list[CandidateItem] = []
     for c in candidates:
@@ -134,10 +176,11 @@ async def debug_trace(req: DebugTraceRequest, deps: AppDeps = Depends(get_deps))
             page=meta.get("page"),
             content=c.content[:3000],
             dense_rank=c.dense_rank, sparse_rank=c.sparse_rank,
+            graph_rank=c.graph_rank, graph_hops=c.graph_hops,
             rrf_score=c.rrf_score,
         ))
 
-    # 阶段 3：Rerank 精排
+    # 阶段 4：Rerank 精排
     top_n = req.rerank_top_n or settings.rerank_top_n
     ranked = await rank_candidates(req.query, candidates, deps.reranker, top_n)
 
@@ -154,14 +197,14 @@ async def debug_trace(req: DebugTraceRequest, deps: AppDeps = Depends(get_deps))
             rrf_score=c.rrf_score, rerank_score=c.rerank_score,
         ))
 
-    # 阶段 4：阈值过滤
+    # 阶段 5：阈值过滤
     threshold = req.score_threshold or settings.score_threshold
     final_items = [
         c for c in rerank_items
         if c.rerank_score is not None and c.rerank_score >= threshold
     ] if not ranked.rerank_degraded else rerank_items[:top_n]
 
-    # 阶段 5：组装 Prompt（真正给 LLM 的）
+    # 阶段 6：组装 Prompt（真正给 LLM 的）
     final_candidates_for_prompt = ranked.selected[:top_n]
     if not ranked.rerank_degraded:
         final_candidates_for_prompt = [
@@ -187,6 +230,11 @@ async def debug_trace(req: DebugTraceRequest, deps: AppDeps = Depends(get_deps))
         dense_results=dense_results,
         dense_count=len(dense_results),
         has_sparse=has_sparse,
+        graph_entities=graph_result.entities if graph_result is not None else [],
+        graph_entities_count=len(graph_result.entities) if graph_result is not None else 0,
+        graph_hits=graph_hits,
+        graph_hits_count=len(graph_hits),
+        graph_skipped=graph_skipped,
         rrf_candidates=rrf_items,
         rrf_count=len(rrf_items),
         rerank_candidates=rerank_items,

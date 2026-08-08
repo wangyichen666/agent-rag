@@ -72,6 +72,12 @@ public class ChatController {
         return Result.ok(chatService.listRewrites());
     }
 
+    /** 返回最近的历史用户查询，用于追溯页点击回放。 */
+    @GetMapping("/traces")
+    public Result<List<Map<String, Object>>> traces() {
+        return Result.ok(chatService.listTraces());
+    }
+
     // ========== Debug / Trace API ==========
 
     /** RAG 全链路调试：query → retrieve → rerank 全流程。 */

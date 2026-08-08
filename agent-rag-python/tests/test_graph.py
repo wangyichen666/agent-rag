@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.rag.extractor import extract_query_entities, extract_triples_batch, parse_json_array
 from app.rag.graph_retriever import GraphCandidate, graph_retrieve
 from app.rag.graph_store import DisabledGraphStore, GraphHit
@@ -79,18 +79,20 @@ def test_fuse_graph_merges_and_reranks():
 
 
 def test_graph_retrieve_degrades_when_disabled_or_empty():
-    settings = get_settings()
+    settings_disabled = Settings(graph_enabled=False)
     store = DisabledGraphStore()
     llm = FakeLlm(["[]"])
-    result = asyncio.run(graph_retrieve(store, llm, ["kb1"], "问题", settings))
-    assert result == []
+    result = asyncio.run(graph_retrieve(store, llm, ["kb1"], "问题", settings_disabled))
+    assert result.hits == []
+    assert result.skipped == "知识图谱功能未开启"
 
     class EmptyStore(DisabledGraphStore):
         def fallback_match_entities(self, kb_ids, query, limit=10):
             return []
 
-    result2 = asyncio.run(graph_retrieve(EmptyStore(), llm, ["kb1"], "问题", settings))
-    assert result2 == []
+    result2 = asyncio.run(graph_retrieve(EmptyStore(), llm, ["kb1"], "问题", get_settings()))
+    assert result2.hits == []
+    assert "未匹配" in result2.skipped
 
 
 def test_graph_hit_shapes():

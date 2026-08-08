@@ -1,6 +1,6 @@
 import { SearchOutlined } from '@ant-design/icons'
 import {
-  App, Button, Card, Descriptions, Input, Select,
+  App, Button, Card, Descriptions, Divider, Input, Select,
   Space, Table, Tag, Typography, Result,
 } from 'antd'
 import { useEffect, useState } from 'react'
@@ -22,17 +22,37 @@ interface CandidateItem {
   chunk_id: string; doc_id: string; source_file: string
   title_path: string[]; page?: number
   content: string; dense_rank?: number; dense_score?: number
-  sparse_rank?: number; rrf_score: number; rerank_score?: number
+  sparse_rank?: number; graph_rank?: number; graph_hops?: number
+  rrf_score: number; rerank_score?: number
+}
+
+interface GraphHitItem {
+  chunk_id: string; doc_id: string; source_file: string
+  title_path: string[]; page?: number
+  content: string; hop: number; score: number
 }
 
 interface TraceData {
   query: string; rewritten_query: string
   embedding_dim: number; embedding_preview: number[]
   dense_results: DenseResultItem[]; dense_count: number; has_sparse: boolean
+  graph_entities: string[]; graph_entities_count: number
+  graph_hits: GraphHitItem[]; graph_hits_count: number; graph_skipped: string
   rrf_candidates: CandidateItem[]; rrf_count: number
   rerank_candidates: CandidateItem[]; rerank_degraded: boolean; rerank_count: number
   final_candidates: CandidateItem[]; final_count: number; threshold_applied: number
   system_prompt: string; user_prompt: string; full_prompt: string
+}
+
+interface TraceRecord {
+  messageId: number
+  traceId: string
+  conversationId: number
+  conversationTitle: string
+  query: string
+  rewrittenQuery?: string
+  kbIds: string
+  createdAt: string
 }
 
 // ---------- 辅助组件 ----------
@@ -76,10 +96,32 @@ export default function TracePage() {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [trace, setTrace] = useState<TraceData | null>(null)
+  const [traces, setTraces] = useState<TraceRecord[]>([])
+  const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
 
   useEffect(() => {
     api.get<Kb[]>('/api/kb').then(setKbs).catch(() => {})
+    api.get<TraceRecord[]>('/api/traces').then(setTraces).catch(() => {})
   }, [])
+
+  const runTraceFromHistory = async (messageId: number) => {
+    const item = traces.find(t => t.messageId === messageId)
+    if (!item) return
+    let ids: number[] = []
+    try {
+      ids = JSON.parse(item.kbIds) as number[]
+    } catch {
+      ids = []
+    }
+    const validIds = ids.filter(id => kbs.some(k => k.id === id))
+    if (validIds.length === 0) {
+      message.warning('该查询所属会话的知识库已不存在，无法追溯')
+      return
+    }
+    setCheckedKbIds(validIds)
+    setQuery(item.query)
+    await runTraceWith(item.query, validIds, kbs)
+  }
 
   // 支持 URL 参数：?traceId=xxx&query=xxx&kbIds=xxx
   useEffect(() => {
@@ -166,6 +208,26 @@ export default function TracePage() {
               追溯
             </Button>
           </div>
+          <Divider style={{ margin: '8px 0' }} />
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <Text strong>历史 Query：</Text>
+            <Select
+              style={{ flex: 1 }}
+              placeholder="选择一条历史查询，自动执行完整链路追溯"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              value={selectedTraceId}
+              onChange={(v) => {
+                setSelectedTraceId(v ?? null)
+                if (v) void runTraceFromHistory(v)
+              }}
+              options={traces.map(t => ({
+                value: t.messageId,
+                label: `${t.conversationTitle}｜${t.query.length > 24 ? t.query.slice(0, 24) + '…' : t.query}（${(t.createdAt || '').replace('T', ' ').substring(5, 16)}）`,
+              }))}
+            />
+          </div>
         </Space>
       </Card>
 
@@ -214,8 +276,44 @@ export default function TracePage() {
           {/* Stage 2: RRF Fusion */}
           <Card
             size="small" style={{ marginTop: 16 }}
-            title={`阶段 2：RRF 融合 · ${trace.rrf_count} 条候选`}
-            extra={<Tag>dense + sparse → RRF</Tag>}
+            title={`阶段 2：知识图谱检索 · ${trace.graph_entities_count} 个实体 / ${trace.graph_hits_count} 条命中`}
+            extra={<Tag color="geekblue">Neo4j · 1~2 跳</Tag>}
+          >
+            {trace.graph_skipped ? (
+              <Result status="info" title="图谱通道未参与" subTitle={trace.graph_skipped} style={{ padding: 16 }} />
+            ) : (
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>命中的实体：</Text>{' '}
+                  {trace.graph_entities.map((name, i) => (
+                    <Tag key={i} color="geekblue" style={{ marginBottom: 4 }}>{name}</Tag>
+                  ))}
+                </div>
+                <Table
+                  dataSource={trace.graph_hits}
+                  rowKey="chunk_id"
+                  size="small"
+                  pagination={{ pageSize: 5 }}
+                  columns={[
+                    { title: '跳数', dataIndex: 'hop', width: 60 },
+                    { title: '来源', dataIndex: 'source_file', width: 130, ellipsis: true },
+                    { title: '标题路径', render: (_, r) => r.title_path?.join(' / '), width: 150, ellipsis: true },
+                    {
+                      title: '图得分', dataIndex: 'score', width: 140,
+                      render: (v: number) => <ScoreBar score={v} label="Graph" />,
+                    },
+                    { title: '内容', render: (_, r) => <ContentPreview content={r.content} maxLen={200} /> },
+                  ]}
+                />
+              </>
+            )}
+          </Card>
+
+          {/* Stage 3: RRF Fusion */}
+          <Card
+            size="small" style={{ marginTop: 16 }}
+            title={`阶段 3：RRF 融合 · ${trace.rrf_count} 条候选`}
+            extra={<Tag>dense + graph → RRF</Tag>}
           >
             <Table
               dataSource={trace.rrf_candidates}
@@ -226,6 +324,12 @@ export default function TracePage() {
                 { title: '来源', dataIndex: 'source_file', width: 120, ellipsis: true },
                 { title: 'Dense Rank', dataIndex: 'dense_rank', width: 90 },
                 { title: 'Sparse Rank', dataIndex: 'sparse_rank', width: 90 },
+                {
+                  title: '图谱', width: 110,
+                  render: (_, r) => r.graph_rank
+                    ? <Tag color="geekblue">图#{r.graph_rank} ({r.graph_hops ?? 0}跳)</Tag>
+                    : <Text type="secondary">-</Text>,
+                },
                 {
                   title: 'RRF Score', dataIndex: 'rrf_score', width: 150,
                   render: (v: number) => <ScoreBar score={v} max={0.05} label="RRF" />,
@@ -238,7 +342,7 @@ export default function TracePage() {
           {/* Stage 3: Rerank */}
           <Card
             size="small" style={{ marginTop: 16 }}
-            title={`阶段 3：Rerank 精排 · ${trace.rerank_count} 条${trace.rerank_degraded ? '（降级）' : ''}`}
+            title={`阶段 4：Rerank 精排 · ${trace.rerank_count} 条${trace.rerank_degraded ? '（降级）' : ''}`}
             extra={<Tag color={trace.rerank_degraded ? 'orange' : 'purple'}>SiliconFlow Qwen3-Reranker</Tag>}
           >
             <Table
@@ -264,7 +368,7 @@ export default function TracePage() {
           {/* Stage 4: Final */}
           <Card
             size="small" style={{ marginTop: 16 }}
-            title={`阶段 4：最终输出 · ${trace.final_count} 条${trace.threshold_applied > 0 ? `（阈值 ≥ ${trace.threshold_applied}）` : ''}`}
+            title={`阶段 5：最终输出 · ${trace.final_count} 条${trace.threshold_applied > 0 ? `（阈值 ≥ ${trace.threshold_applied}）` : ''}`}
             extra={<Tag color="green">送给 LLM</Tag>}
           >
             {trace.final_count === 0 ? (
@@ -291,7 +395,7 @@ export default function TracePage() {
           {/* Stage 5: The actual Prompt sent to LLM */}
           <Card
             size="small" style={{ marginTop: 16 }}
-            title={`阶段 5：组装后的 LLM Prompt（${trace.final_count > 0 ? `包含 ${trace.final_count} 条参考资料` : '无参考资料 — 将触发拒答'}）`}
+            title={`阶段 6：组装后的 LLM Prompt（${trace.final_count > 0 ? `包含 ${trace.final_count} 条参考资料` : '无参考资料 — 将触发拒答'}）`}
             extra={<Tag color="red">System + User → LLM</Tag>}
           >
             {trace.final_count === 0 ? (
